@@ -1,0 +1,41 @@
+# Build outputs
+bin/
+obj/
+publish-selfcontained/
+
+# Visual Studio
+.vs/
+*.user
+*.suo
+*.sln.docstates
+.visualstudio/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# NuGet
+packages/
+.nuget/
+
+# Logs
+*.log
+
+# OS files
+Thumbs.db
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+
+# User-specific settings
+user.config
+
+# Build cache
+.cache/

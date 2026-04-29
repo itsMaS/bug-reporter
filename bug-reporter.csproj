@@ -1,0 +1,81 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net9.0-windows</TargetFramework>
+    <RootNamespace>bug_reporter</RootNamespace>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <UseWindowsForms>true</UseWindowsForms>
+    <PublishProfile>FolderProfile</PublishProfile>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <DebugType>none</DebugType>
+    <DebugSymbols>false</DebugSymbols>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="LibVLCSharp" Version="3.8.5" />
+    <PackageReference Include="LibVLCSharp.WinForms" Version="3.8.5" />
+    <PackageReference Include="OpenCvSharp4" Version="4.8.1.26" />
+    <PackageReference Include="OpenCvSharp4.runtime.win" Version="4.8.1.26" />
+    <PackageReference Include="NAudio" Version="2.2.1" />
+    <PackageReference Include="System.Drawing.Common" Version="8.0.0" />
+    <PackageReference Include="VideoLAN.LibVLC.Windows" Version="3.0.21" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <VlcNativeDir>$(NuGetPackageRoot)videolan.libvlc.windows\3.0.21\build\x64</VlcNativeDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="tools\ffmpeg\bin\**\*.*" Condition="Exists('tools\\ffmpeg\\bin')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>Always</CopyToPublishDirectory>
+      <Link>tools\ffmpeg\bin\%(RecursiveDir)%(Filename)%(Extension)</Link>
+    </None>
+    <None Include="tools\ffmpeg\LICENSE.txt" Condition="Exists('tools\\ffmpeg\\LICENSE.txt')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>Always</CopyToPublishDirectory>
+      <Link>tools\ffmpeg\LICENSE.txt</Link>
+    </None>
+  </ItemGroup>
+
+  <Target Name="WarnIfBundledFfmpegMissing" BeforeTargets="Publish">
+    <Warning Text="Bundled FFmpeg not found at tools\ffmpeg\bin\ffmpeg.exe; publish output will rely on system PATH FFmpeg."
+             Condition="!Exists('tools\\ffmpeg\\bin\\ffmpeg.exe')" />
+    <Warning Text="Bundled FFprobe not found at tools\ffmpeg\bin\ffprobe.exe; report metadata may fail in publish output without system PATH FFprobe."
+             Condition="!Exists('tools\\ffmpeg\\bin\\ffprobe.exe')" />
+  </Target>
+
+  <Target Name="CopyVlcRuntimeToPublish" AfterTargets="Publish">
+    <ItemGroup>
+      <VlcRootFiles Include="$(VlcNativeDir)\*.dll" />
+      <VlcPluginFiles Include="$(VlcNativeDir)\plugins\**\*.*" />
+    </ItemGroup>
+
+    <Copy SourceFiles="@(VlcRootFiles)"
+          DestinationFolder="$(PublishDir)"
+          SkipUnchangedFiles="true"
+          Condition="Exists('$(VlcNativeDir)')" />
+
+    <Copy SourceFiles="@(VlcPluginFiles)"
+          DestinationFiles="@(VlcPluginFiles->'$(PublishDir)\plugins\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true"
+          Condition="Exists('$(VlcNativeDir)')" />
+  </Target>
+
+  <Target Name="CleanPublishCultureFolders" AfterTargets="Publish">
+    <ItemGroup>
+      <CultureDirectories Include="$(PublishDir)cs;$(PublishDir)de;$(PublishDir)es;$(PublishDir)fr;$(PublishDir)it;$(PublishDir)ja;$(PublishDir)ko;$(PublishDir)pl;$(PublishDir)pt-BR;$(PublishDir)ru;$(PublishDir)tr;$(PublishDir)zh-Hans;$(PublishDir)zh-Hant" />
+    </ItemGroup>
+
+    <RemoveDir Directories="@(CultureDirectories)" Condition="Exists('%(CultureDirectories.Identity)')" />
+  </Target>
+
+</Project>
