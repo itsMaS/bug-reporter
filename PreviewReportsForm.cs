@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Drawing;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Text.Json;
 using System.Windows.Forms;
 using LibVLCSharp.Shared;
@@ -31,11 +32,22 @@ public class PreviewReportsForm : Form
     private static Color Red      => RecorderForm.RedColor;
 
     private readonly string _videoFolder;
+    private readonly SettingsManager? _settings;
     private readonly List<ReportRecord> _records = new();
+    private readonly Panel _titleBar;
+    private readonly Label _folderLabel;
+    private readonly Panel _leftPanel;
+    private readonly Panel _rightPanel;
+    private readonly Button _authDriveButton;
+    private readonly Button _exportButton;
+    private readonly Button _refreshButton;
+    private readonly Panel _controlsPanel;
+    private readonly Panel _metaPanel;
     private readonly ListBox _recordsList;
     private readonly VideoView _videoBox;
     private readonly Label _titleValue;
     private readonly Label _fileValue;
+    private readonly LinkLabel _linkValue;
     private readonly TextBox _descriptionBox;
     private readonly Panel _sourcesTabsBar;
     private readonly Panel _sourcesContentPanel;
@@ -57,9 +69,10 @@ public class PreviewReportsForm : Form
     private bool _seekUpdateInternal;
     private bool _resumeAfterSeek;
 
-    public PreviewReportsForm(string videoFolder)
+    public PreviewReportsForm(string videoFolder, SettingsManager? settings = null)
     {
         _videoFolder = videoFolder;
+        _settings = settings;
 
         Rectangle screenBounds = Screen.PrimaryScreen?.Bounds ?? new Rectangle(0, 0, 1920, 1080);
         int formWidth = screenBounds.Width;
@@ -83,25 +96,21 @@ public class PreviewReportsForm : Form
         WindowState = FormWindowState.Maximized;
         BackColor = Bg;
 
-        Panel titleBar = new Panel { Location = new Point(0, 0), Size = new Size(formWidth, titleHeight), BackColor = Surface };
-        titleBar.MouseDown += TitleBar_MouseDown;
+        _titleBar = new Panel { Location = new Point(0, 0), Size = new Size(formWidth, titleHeight), BackColor = Surface };
+        _titleBar.MouseDown += TitleBar_MouseDown;
         var titleLbl = RecorderForm.MkLabel("Preview Reports", 11, true, Tx); titleLbl.Location = new Point(16, 11);
         titleLbl.MouseDown += TitleBar_MouseDown;
-        var folderLbl = RecorderForm.MkLabel(_videoFolder, 8, false, Tx2); folderLbl.Location = new Point(170, 13); folderLbl.MaximumSize = new Size(formWidth - 230, 18);
+        _folderLabel = RecorderForm.MkLabel(_videoFolder, 8, false, Tx2); _folderLabel.Location = new Point(170, 13); _folderLabel.MaximumSize = new Size(formWidth - 230, 18);
 
-        var closeBtn = RecorderForm.MkBtn("✕", Color.Transparent, 44, 42);
-        closeBtn.Location = new Point(formWidth - 44, 0);
-        closeBtn.ForeColor = Tx2;
-        closeBtn.FlatAppearance.MouseOverBackColor = Red;
-        closeBtn.Click += (_, _) => Close();
+        _titleBar.Controls.AddRange(new Control[] { titleLbl, _folderLabel });
 
-        titleBar.Controls.AddRange(new Control[] { titleLbl, folderLbl, closeBtn });
-
-        Panel leftPanel = new Panel { Location = new Point(0, titleHeight), Size = new Size(leftWidth, contentHeight), BackColor = Surface };
+        _leftPanel = new Panel { Location = new Point(0, titleHeight), Size = new Size(leftWidth, contentHeight), BackColor = Surface };
         var leftTitle = RecorderForm.MkLabel("RECORDINGS", 8, true, Tx2); leftTitle.Location = new Point(14, 10);
         int listWidth = leftWidth - 28;
         int refreshButtonY = contentHeight - 46;
-        int listHeight = refreshButtonY - 38;
+        int exportButtonY = refreshButtonY - 44;
+        int authButtonY = exportButtonY - 44;
+        int listHeight = authButtonY - 38;
         _recordsList = new ListBox
         {
             Location = new Point(14, 30), Size = new Size(listWidth, listHeight),
@@ -116,12 +125,19 @@ public class PreviewReportsForm : Form
             ShowScrollBar(_recordsList.Handle, SbHorz, false);
         };
         _recordsList.SelectedIndexChanged += RecordsList_SelectedIndexChanged;
-        var refreshBtn = RecorderForm.MkBtn("Refresh", Blue, listWidth, 36);
-        refreshBtn.Location = new Point(14, refreshButtonY);
-        refreshBtn.Click += async (_, _) => await RefreshRecordsAsync();
-        leftPanel.Controls.AddRange(new Control[] { leftTitle, _recordsList, refreshBtn });
+        _authDriveButton = RecorderForm.MkBtn("Authenticate Drive", Surface2, listWidth, 36);
+        _authDriveButton.Location = new Point(14, authButtonY);
+        _authDriveButton.ForeColor = Tx2;
+        _authDriveButton.Click += AuthenticateDrive_Click;
+        _exportButton = RecorderForm.MkBtn("Export CSV", Green, listWidth, 36);
+        _exportButton.Location = new Point(14, exportButtonY);
+        _exportButton.Click += async (_, _) => await ExportRecordsCsvAsync();
+        _refreshButton = RecorderForm.MkBtn("Refresh", Blue, listWidth, 36);
+        _refreshButton.Location = new Point(14, refreshButtonY);
+        _refreshButton.Click += async (_, _) => await RefreshRecordsAsync();
+        _leftPanel.Controls.AddRange(new Control[] { leftTitle, _recordsList, _authDriveButton, _exportButton, _refreshButton });
 
-        Panel rightPanel = new Panel { Location = new Point(leftWidth, titleHeight), Size = new Size(rightWidth, contentHeight), BackColor = Bg };
+        _rightPanel = new Panel { Location = new Point(leftWidth, titleHeight), Size = new Size(rightWidth, contentHeight), BackColor = Bg };
 
         _videoBox = new VideoView
         {
@@ -129,7 +145,7 @@ public class PreviewReportsForm : Form
             BackColor = Color.FromArgb(16, 16, 18)
         };
 
-        Panel controls = new Panel { Location = new Point(0, videoHeight), Size = new Size(rightWidth, controlsHeight), BackColor = Surface };
+        _controlsPanel = new Panel { Location = new Point(0, videoHeight), Size = new Size(rightWidth, controlsHeight), BackColor = Surface };
         _playPauseButton = RecorderForm.MkBtn("Play", Blue, 80, 32); _playPauseButton.Location = new Point(16, 10); _playPauseButton.Click += PlayPause_Click;
         _stopButton = RecorderForm.MkBtn("Stop", Surface2, 72, 32); _stopButton.Location = new Point(104, 10); _stopButton.Click += Stop_Click;
         var openBtn = RecorderForm.MkBtn("Open File", Surface2, 100, 32); openBtn.Location = new Point(184, 10); openBtn.ForeColor = Tx2; openBtn.Click += OpenFile_Click;
@@ -149,17 +165,33 @@ public class PreviewReportsForm : Form
         _seekBar.ValueChanged += SeekBar_ValueChanged;
 
         _timeLabel = RecorderForm.MkLabel("0:00 / 0:00", 9, false, Tx2); _timeLabel.Location = new Point(rightWidth - 90, 18);
-        controls.Controls.AddRange(new Control[] { _playPauseButton, _stopButton, openBtn, _seekBar, _timeLabel });
+        _controlsPanel.Controls.AddRange(new Control[] { _playPauseButton, _stopButton, openBtn, _seekBar, _timeLabel });
 
-        Panel metaPanel = new Panel { Location = new Point(0, metaPanelY), Size = new Size(rightWidth, metaPanelHeight), BackColor = Bg };
+        _metaPanel = new Panel { Location = new Point(0, metaPanelY), Size = new Size(rightWidth, metaPanelHeight), BackColor = Bg };
         var tLbl = RecorderForm.MkLabel("TITLE", 8, true, Tx2); tLbl.Location = new Point(16, 10);
         _titleValue = RecorderForm.MkLabel("-", 10, true, Tx); _titleValue.Location = new Point(16, 28); _titleValue.MaximumSize = new Size(rightWidth - 30, 20);
         var fLbl = RecorderForm.MkLabel("FILE", 8, true, Tx2); fLbl.Location = new Point(16, 56);
         _fileValue = RecorderForm.MkLabel("-", 8, false, Tx2); _fileValue.Location = new Point(16, 74); _fileValue.MaximumSize = new Size(rightWidth - 30, 18);
-        var dLbl = RecorderForm.MkLabel("DESCRIPTION", 8, true, Tx2); dLbl.Location = new Point(16, 98);
+        var lLbl = RecorderForm.MkLabel("LINK", 8, true, Tx2); lLbl.Location = new Point(16, 94);
+        _linkValue = new LinkLabel
+        {
+            Text = "-",
+            Location = new Point(16, 112),
+            Size = new Size(rightWidth - 32, 18),
+            Font = new Font("Segoe UI", 8),
+            LinkBehavior = LinkBehavior.HoverUnderline,
+            AutoEllipsis = true,
+            BackColor = Bg,
+            LinkColor = Blue,
+            ActiveLinkColor = Green,
+            VisitedLinkColor = Blue
+        };
+        _linkValue.Click += ReportLink_Click;
 
-        _sourcesTabsBar = new Panel { Location = new Point(16, 116), Size = new Size(rightWidth - 32, 30), BackColor = Bg };
-        _sourcesContentPanel = new Panel { Location = new Point(16, 148), Size = new Size(rightWidth - 32, Math.Max(100, metaPanelHeight - 156)), BackColor = Bg };
+        var dLbl = RecorderForm.MkLabel("DESCRIPTION", 8, true, Tx2); dLbl.Location = new Point(16, 136);
+
+        _sourcesTabsBar = new Panel { Location = new Point(16, 154), Size = new Size(rightWidth - 32, 30), BackColor = Bg };
+        _sourcesContentPanel = new Panel { Location = new Point(16, 186), Size = new Size(rightWidth - 32, Math.Max(100, metaPanelHeight - 194)), BackColor = Bg };
 
         var descHost = new Panel { Dock = DockStyle.Fill, Padding = new Padding(8), BackColor = Bg };
         _descriptionBox = new TextBox
@@ -178,7 +210,7 @@ public class PreviewReportsForm : Form
         AddSourceTab("description", "Description", descHost);
         ShowSourceTab("description");
 
-        metaPanel.Controls.AddRange(new Control[] { tLbl, _titleValue, fLbl, _fileValue, dLbl, _sourcesTabsBar, _sourcesContentPanel });
+        _metaPanel.Controls.AddRange(new Control[] { tLbl, _titleValue, fLbl, _fileValue, lLbl, _linkValue, dLbl, _sourcesTabsBar, _sourcesContentPanel });
 
         _loadingLabel = new Label
         {
@@ -191,11 +223,11 @@ public class PreviewReportsForm : Form
             TextAlign = ContentAlignment.MiddleCenter,
             Visible = false
         };
-        rightPanel.Controls.Add(_loadingLabel);
+        _rightPanel.Controls.Add(_loadingLabel);
 
-        rightPanel.Controls.AddRange(new Control[] { _videoBox, controls, metaPanel });
+        _rightPanel.Controls.AddRange(new Control[] { _videoBox, _controlsPanel, _metaPanel });
 
-        Controls.AddRange(new Control[] { titleBar, leftPanel, rightPanel });
+        Controls.AddRange(new Control[] { _titleBar, _leftPanel, _rightPanel });
 
         Core.Initialize();
         _libVlc = new LibVLC($"--plugin-path={Path.Combine(AppContext.BaseDirectory, "plugins")}");
@@ -217,7 +249,70 @@ public class PreviewReportsForm : Form
         _positionTimer.Start();
 
         FormClosing += PreviewReportsForm_FormClosing;
-        Shown += async (_, _) => await RefreshRecordsAsync();
+        Resize += (_, _) => ApplyResponsiveLayout();
+        Shown += async (_, _) =>
+        {
+            ApplyResponsiveLayout();
+            await RefreshRecordsAsync();
+        };
+    }
+
+    private void ApplyResponsiveLayout()
+    {
+        int formWidth = ClientSize.Width;
+        int formHeight = ClientSize.Height;
+        int titleHeight = 42;
+        int leftWidth = 330;
+        int contentHeight = Math.Max(220, formHeight - titleHeight);
+        int rightWidth = Math.Max(420, formWidth - leftWidth);
+        int videoHeight = (int)(contentHeight * 0.46);
+        int controlsHeight = 52;
+        int metaPanelY = videoHeight + controlsHeight;
+        int metaPanelHeight = Math.Max(120, contentHeight - metaPanelY);
+
+        _titleBar.Location = new Point(0, 0);
+        _titleBar.Size = new Size(formWidth, titleHeight);
+        _folderLabel.MaximumSize = new Size(Math.Max(120, formWidth - 230), 18);
+
+        _leftPanel.Location = new Point(0, titleHeight);
+        _leftPanel.Size = new Size(leftWidth, contentHeight);
+
+        _rightPanel.Location = new Point(leftWidth, titleHeight);
+        _rightPanel.Size = new Size(rightWidth, contentHeight);
+
+        int listWidth = leftWidth - 28;
+        int refreshButtonY = contentHeight - 46;
+        int exportButtonY = refreshButtonY - 44;
+        int authButtonY = exportButtonY - 44;
+        int listHeight = Math.Max(120, authButtonY - 38);
+
+        _recordsList.Location = new Point(14, 30);
+        _recordsList.Size = new Size(listWidth, listHeight);
+        _authDriveButton.Location = new Point(14, authButtonY);
+        _authDriveButton.Size = new Size(listWidth, 36);
+        _exportButton.Location = new Point(14, exportButtonY);
+        _exportButton.Size = new Size(listWidth, 36);
+        _refreshButton.Location = new Point(14, refreshButtonY);
+        _refreshButton.Size = new Size(listWidth, 36);
+
+        _videoBox.Location = new Point(0, 0);
+        _videoBox.Size = new Size(rightWidth, videoHeight);
+
+        _controlsPanel.Location = new Point(0, videoHeight);
+        _controlsPanel.Size = new Size(rightWidth, controlsHeight);
+        _seekBar.Location = new Point(292, 12);
+        _seekBar.Size = new Size(Math.Max(120, rightWidth - 392), 26);
+        _timeLabel.Location = new Point(Math.Max(300, rightWidth - 90), 18);
+
+        _metaPanel.Location = new Point(0, metaPanelY);
+        _metaPanel.Size = new Size(rightWidth, metaPanelHeight);
+        _titleValue.MaximumSize = new Size(rightWidth - 30, 20);
+        _fileValue.MaximumSize = new Size(rightWidth - 30, 18);
+        _linkValue.Size = new Size(rightWidth - 32, 18);
+        _sourcesTabsBar.Size = new Size(rightWidth - 32, 30);
+        _sourcesContentPanel.Size = new Size(rightWidth - 32, Math.Max(100, metaPanelHeight - 194));
+
+        _loadingLabel.Size = new Size(rightWidth, contentHeight);
     }
 
     private void TitleBar_MouseDown(object? sender, MouseEventArgs e)
@@ -276,6 +371,46 @@ public class PreviewReportsForm : Form
         _loadingLabel.Visible = false;
     }
 
+    private async Task ExportRecordsCsvAsync()
+    {
+        if (!Directory.Exists(_videoFolder) || !Directory.EnumerateFiles(_videoFolder, "*.json", SearchOption.TopDirectoryOnly).Any())
+        {
+            MessageBox.Show(this, "No JSON report files found to export.", "Export CSV", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        using var saveDialog = new SaveFileDialog
+        {
+            Title = "Export reports as CSV",
+            Filter = "CSV files (*.csv)|*.csv|All files (*.*)|*.*",
+            FileName = $"reports-{DateTime.Now:yyyyMMdd-HHmmss}.csv",
+            InitialDirectory = Directory.Exists(_videoFolder) ? _videoFolder : Environment.GetFolderPath(Environment.SpecialFolder.Desktop)
+        };
+
+        if (saveDialog.ShowDialog(this) != DialogResult.OK || string.IsNullOrWhiteSpace(saveDialog.FileName))
+            return;
+
+        _loadingLabel.Text = "Exporting CSV...";
+        _loadingLabel.Visible = true;
+
+        try
+        {
+            int exportedCount = await Task.Run(() => WriteRecordsCsv(saveDialog.FileName)).ConfigureAwait(true);
+            Logger.Instance.Log($"Preview: exported CSV with {exportedCount} JSON records to {saveDialog.FileName}");
+            MessageBox.Show(this, "CSV export complete.", "Export CSV", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+        catch (Exception ex)
+        {
+            Logger.Instance.Log($"Preview: CSV export failed: {ex.Message}");
+            MessageBox.Show(this, "CSV export failed. Check log for details.", "Export CSV", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+        finally
+        {
+            _loadingLabel.Text = "Loading reports...";
+            _loadingLabel.Visible = false;
+        }
+    }
+
     public async void RefreshReports()
     {
         if (IsDisposed) return;
@@ -317,6 +452,7 @@ public class PreviewReportsForm : Form
                 FileName = Path.GetFileName(file),
                 Title = string.IsNullOrWhiteSpace(metadata.Title) ? Path.GetFileNameWithoutExtension(file) : metadata.Title,
                 Description = metadata.Description,
+                Link = metadata.Link,
                 Sources = metadata.Sources
             };
             result.Add(rec);
@@ -335,6 +471,8 @@ public class PreviewReportsForm : Form
     {
         _titleValue.Text = record.Title;
         _fileValue.Text = record.Path;
+        _linkValue.Text = string.IsNullOrWhiteSpace(record.Link) ? "-" : record.Link;
+        _linkValue.Enabled = Uri.TryCreate(record.Link, UriKind.Absolute, out _);
         _descriptionBox.Text = record.Description ?? string.Empty;
 
         // Keep the first tab (description), clear all dynamic source tabs.
@@ -563,6 +701,169 @@ public class PreviewReportsForm : Form
             .Replace("\\r", "\r\n");
     }
 
+    private int WriteRecordsCsv(string csvPath)
+    {
+        var exportRecords = LoadJsonExportRecords()
+            .OrderByDescending(record => record.LastWriteTime)
+            .ToList();
+
+        if (exportRecords.Count == 0)
+            throw new InvalidOperationException("No JSON report records were found in the folder.");
+
+        var headers = new List<string>
+        {
+            "Title",
+            "Description",
+            "Leave empty",
+            "Leave Empty",
+            "Link",
+            "Leave empty",
+            "Leave empty",
+            "Leave empty",
+            "Scene name",
+            "Level area",
+            "Version"
+        };
+
+        var sb = new StringBuilder();
+        sb.AppendLine(string.Join(",", headers.Select(EscapeCsvCell)));
+
+        foreach (var record in exportRecords)
+        {
+            var cells = new List<string>
+            {
+                record.Title,
+                record.Description,
+                string.Empty,
+                string.Empty,
+                record.Link,
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                record.SceneName,
+                record.LevelArea,
+                record.Version
+            };
+
+            sb.AppendLine(string.Join(",", cells.Select(EscapeCsvCell)));
+        }
+
+        File.WriteAllText(csvPath, sb.ToString(), Encoding.UTF8);
+        return exportRecords.Count;
+    }
+
+    private List<ExportJsonRecord> LoadJsonExportRecords()
+    {
+        var records = new List<ExportJsonRecord>();
+
+        foreach (string jsonPath in Directory.EnumerateFiles(_videoFolder, "*.json", SearchOption.TopDirectoryOnly))
+        {
+            JsonDocument? doc = null;
+            try
+            {
+                doc = JsonDocument.Parse(File.ReadAllText(jsonPath));
+                JsonElement root = doc.RootElement;
+
+                string title = TryGetCaseInsensitive(root, "Title", out JsonElement t)
+                    ? (t.GetString() ?? string.Empty)
+                    : string.Empty;
+                string description = TryGetCaseInsensitive(root, "Description", out JsonElement d)
+                    ? (d.GetString() ?? string.Empty)
+                    : string.Empty;
+                string link = TryGetCaseInsensitive(root, "link", out JsonElement l)
+                    ? (l.GetString() ?? string.Empty)
+                    : string.Empty;
+
+                string sceneName = string.Empty;
+                string levelArea = string.Empty;
+                string version = string.Empty;
+
+                if (TryGetCaseInsensitive(root, "Context", out JsonElement ctx) && ctx.ValueKind == JsonValueKind.Object)
+                {
+                    ExtractContextFields(ctx, ref sceneName, ref levelArea, ref version);
+                }
+
+                records.Add(new ExportJsonRecord
+                {
+                    Title = title,
+                    Description = description,
+                    Link = link,
+                    SceneName = sceneName,
+                    LevelArea = levelArea,
+                    Version = version,
+                    LastWriteTime = File.GetLastWriteTime(jsonPath)
+                });
+            }
+            catch (Exception ex)
+            {
+                Logger.Instance.Log($"Preview CSV export: skipped invalid JSON file {jsonPath}: {ex.Message}");
+            }
+            finally
+            {
+                doc?.Dispose();
+            }
+        }
+
+        return records;
+    }
+
+    private static void ExtractContextFields(JsonElement contextObj, ref string sceneName, ref string levelArea, ref string version)
+    {
+        foreach (JsonProperty p in contextObj.EnumerateObject())
+        {
+            if (TryAssignNamedField(p.Name, p.Value.ToString(), ref sceneName, ref levelArea, ref version))
+                continue;
+
+            if (p.Value.ValueKind == JsonValueKind.Object)
+            {
+                foreach (JsonProperty child in p.Value.EnumerateObject())
+                    TryAssignNamedField(child.Name, child.Value.ToString(), ref sceneName, ref levelArea, ref version);
+            }
+            else if (p.Value.ValueKind == JsonValueKind.String)
+            {
+                string normalized = NormalizePreviewText(p.Value.GetString() ?? string.Empty);
+                string[] lines = normalized.Split(new[] { "\r\n", "\n", "\r" }, StringSplitOptions.RemoveEmptyEntries);
+                foreach (string line in lines)
+                {
+                    string[] kv = line.Split('\t', 2, StringSplitOptions.TrimEntries);
+                    if (kv.Length == 2)
+                        TryAssignNamedField(kv[0], kv[1], ref sceneName, ref levelArea, ref version);
+                }
+            }
+        }
+    }
+
+    private static bool TryAssignNamedField(string key, string value, ref string sceneName, ref string levelArea, ref string version)
+    {
+        if (string.Equals(key, "Scene name", StringComparison.OrdinalIgnoreCase))
+        {
+            sceneName = value ?? string.Empty;
+            return true;
+        }
+
+        if (string.Equals(key, "Level area", StringComparison.OrdinalIgnoreCase))
+        {
+            levelArea = value ?? string.Empty;
+            return true;
+        }
+
+        if (string.Equals(key, "Version", StringComparison.OrdinalIgnoreCase))
+        {
+            version = value ?? string.Empty;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static string EscapeCsvCell(string value)
+    {
+        string text = (value ?? string.Empty).Replace("\r\n", "\n").Replace("\r", "\n");
+        if (text.Contains('"'))
+            text = text.Replace("\"", "\"\"");
+        return $"\"{text}\"";
+    }
+
     private static void EnableHiddenScrollbarScrolling(TextBox box)
     {
         box.MouseWheel += (_, e) =>
@@ -586,11 +887,45 @@ public class PreviewReportsForm : Form
         };
     }
 
+    private void AuthenticateDrive_Click(object? sender, EventArgs e)
+    {
+        string remoteName = _settings?.GetRcloneRemoteName() ?? "gdrive";
+
+        if (!RcloneManager.OpenAuthenticationConsole(remoteName, out string error))
+        {
+            Logger.Instance.Log($"Preview: failed to open rclone authentication flow: {error}");
+            MessageBox.Show(this, "Could not launch rclone authentication. Ensure rclone.exe is bundled in tools/rclone.", "Authenticate Drive", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return;
+        }
+
+        string configPath = RcloneManager.GetConfigPath();
+        string info =
+            $"A command window was opened for rclone setup.\n\n" +
+            $"If remote '{remoteName}' exists, it will reconnect with restricted Drive scope (drive.file).\n" +
+            $"If it does not exist, create a Google Drive remote with that name.\n" +
+            $"Config file: {configPath}\n\n" +
+            "After authentication completes, new reports will auto-upload if enabled.";
+
+        MessageBox.Show(this, info, "Authenticate Drive", MessageBoxButtons.OK, MessageBoxIcon.Information);
+    }
+
     private void OpenFile_Click(object? sender, EventArgs e)
     {
         int idx = _recordsList.SelectedIndex;
         if (idx < 0 || idx >= _records.Count) return;
         try { Process.Start(new ProcessStartInfo(_records[idx].Path) { UseShellExecute = true }); } catch { }
+    }
+
+    private void ReportLink_Click(object? sender, EventArgs e)
+    {
+        int idx = _recordsList.SelectedIndex;
+        if (idx < 0 || idx >= _records.Count) return;
+
+        string link = _records[idx].Link;
+        if (!Uri.TryCreate(link, UriKind.Absolute, out _))
+            return;
+
+        try { Process.Start(new ProcessStartInfo(link) { UseShellExecute = true }); } catch { }
     }
 
     private void PreviewReportsForm_FormClosing(object? sender, FormClosingEventArgs e)
@@ -604,6 +939,10 @@ public class PreviewReportsForm : Form
 
     private static ReportMetadata ReadMetadata(string videoPath)
     {
+        ReportMetadata? sidecar = TryReadMetadataSidecar(videoPath);
+        if (sidecar != null)
+            return sidecar;
+
         string ffprobe = FindFfprobePath();
         if (string.IsNullOrWhiteSpace(ffprobe))
             return new ReportMetadata();
@@ -621,6 +960,7 @@ public class PreviewReportsForm : Form
             string title = GetTag(tags, "title");
             string description = GetTag(tags, "description");
             string comment = GetTag(tags, "comment");
+            string link = string.Empty;
             var sources = new Dictionary<string, string>();
 
             if (!string.IsNullOrWhiteSpace(comment))
@@ -631,6 +971,7 @@ public class PreviewReportsForm : Form
                     JsonElement root = commentJson.RootElement;
                     if (string.IsNullOrWhiteSpace(title) && root.TryGetProperty("Title", out JsonElement t)) title = t.GetString() ?? string.Empty;
                     if (string.IsNullOrWhiteSpace(description) && root.TryGetProperty("Description", out JsonElement d)) description = d.GetString() ?? string.Empty;
+                    link = TryGetCaseInsensitive(root, "link", out JsonElement l) ? (l.GetString() ?? string.Empty) : string.Empty;
                     if (root.TryGetProperty("Context", out JsonElement ctx) && ctx.ValueKind == JsonValueKind.Object)
                     {
                         foreach (JsonProperty p in ctx.EnumerateObject())
@@ -652,6 +993,7 @@ public class PreviewReportsForm : Form
             {
                 Title = title,
                 Description = description,
+                Link = link,
                 Sources = sources
             };
         }
@@ -659,6 +1001,68 @@ public class PreviewReportsForm : Form
         {
             return new ReportMetadata();
         }
+    }
+
+    private static ReportMetadata? TryReadMetadataSidecar(string videoPath)
+    {
+        string jsonPath = Path.ChangeExtension(videoPath, ".json");
+        if (!File.Exists(jsonPath))
+            return null;
+
+        try
+        {
+            using JsonDocument doc = JsonDocument.Parse(File.ReadAllText(jsonPath));
+            JsonElement root = doc.RootElement;
+            var sources = new Dictionary<string, string>();
+
+            if (TryGetCaseInsensitive(root, "Context", out JsonElement ctx) && ctx.ValueKind == JsonValueKind.Object)
+            {
+                foreach (JsonProperty p in ctx.EnumerateObject())
+                {
+                    string val = p.Value.ValueKind is JsonValueKind.Object or JsonValueKind.Array
+                        ? JsonSerializer.Serialize(p.Value, new JsonSerializerOptions { WriteIndented = true })
+                        : p.Value.ToString();
+                    sources[p.Name] = val;
+                }
+            }
+
+            string title = TryGetCaseInsensitive(root, "Title", out JsonElement t) ? (t.GetString() ?? string.Empty) : string.Empty;
+            string description = TryGetCaseInsensitive(root, "Description", out JsonElement d) ? (d.GetString() ?? string.Empty) : string.Empty;
+            string link = TryGetCaseInsensitive(root, "link", out JsonElement l) ? (l.GetString() ?? string.Empty) : string.Empty;
+
+            return new ReportMetadata
+            {
+                Title = title,
+                Description = description,
+                Link = link,
+                Sources = sources
+            };
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static bool TryGetCaseInsensitive(JsonElement obj, string name, out JsonElement value)
+    {
+        if (obj.ValueKind != JsonValueKind.Object)
+        {
+            value = default;
+            return false;
+        }
+
+        foreach (JsonProperty p in obj.EnumerateObject())
+        {
+            if (string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase))
+            {
+                value = p.Value;
+                return true;
+            }
+        }
+
+        value = default;
+        return false;
     }
 
     private static string GetTag(JsonElement tags, string key)
@@ -730,6 +1134,7 @@ public class PreviewReportsForm : Form
         public string FileName { get; set; } = string.Empty;
         public string Title { get; set; } = string.Empty;
         public string? Description { get; set; }
+        public string Link { get; set; } = string.Empty;
         public Dictionary<string, string> Sources { get; set; } = new();
     }
 
@@ -737,6 +1142,18 @@ public class PreviewReportsForm : Form
     {
         public string Title { get; set; } = string.Empty;
         public string Description { get; set; } = string.Empty;
+        public string Link { get; set; } = string.Empty;
         public Dictionary<string, string> Sources { get; set; } = new();
+    }
+
+    private sealed class ExportJsonRecord
+    {
+        public string Title { get; set; } = string.Empty;
+        public string Description { get; set; } = string.Empty;
+        public string Link { get; set; } = string.Empty;
+        public string SceneName { get; set; } = string.Empty;
+        public string LevelArea { get; set; } = string.Empty;
+        public string Version { get; set; } = string.Empty;
+        public DateTime LastWriteTime { get; set; }
     }
 }

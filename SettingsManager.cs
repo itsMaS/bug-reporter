@@ -55,7 +55,10 @@ public class SettingsManager
             { "SaveClipKeyName", "F10" },
             { "RetrospectiveDurationSeconds", 15 },
             { "OutputFolder", "" },
-            { "ContextFilePaths", new List<string>() }
+            { "ContextFilePaths", new List<string>() },
+            { "RcloneRemoteName", "gdrive" },
+            { "RcloneDriveFolder", "BugReporter" },
+            { "AutoUploadToGoogleDrive", true }
         };
     }
 
@@ -188,6 +191,57 @@ public class SettingsManager
     public void SetContextFilePaths(List<string> paths)
     {
         _settings["ContextFilePaths"] = paths ?? new List<string>();
+        SaveSettings();
+    }
+
+    public string GetRcloneRemoteName()
+    {
+        string value = GetStringSetting("RcloneRemoteName", "gdrive").Trim();
+        return string.IsNullOrWhiteSpace(value) ? "gdrive" : value;
+    }
+
+    public void SetRcloneRemoteName(string remoteName)
+    {
+        string value = (remoteName ?? string.Empty).Trim();
+        _settings["RcloneRemoteName"] = string.IsNullOrWhiteSpace(value) ? "gdrive" : value;
+        SaveSettings();
+    }
+
+    public string GetRcloneDriveFolder()
+    {
+        string value = GetStringSetting("RcloneDriveFolder", "BugReporter").Trim();
+        return value.Replace('\\', '/').Trim('/');
+    }
+
+    public void SetRcloneDriveFolder(string driveFolder)
+    {
+        string value = (driveFolder ?? string.Empty).Trim().Replace('\\', '/').Trim('/');
+        _settings["RcloneDriveFolder"] = string.IsNullOrWhiteSpace(value) ? "BugReporter" : value;
+        SaveSettings();
+    }
+
+    public bool GetAutoUploadToGoogleDrive()
+    {
+        if (!_settings.TryGetValue("AutoUploadToGoogleDrive", out object? value) || value == null)
+            return true;
+
+        if (value is JsonElement element)
+        {
+            if (element.ValueKind == JsonValueKind.True) return true;
+            if (element.ValueKind == JsonValueKind.False) return false;
+            if (element.ValueKind == JsonValueKind.String && bool.TryParse(element.GetString(), out bool parsedString)) return parsedString;
+            if (element.ValueKind == JsonValueKind.Number && element.TryGetInt32(out int parsedInt)) return parsedInt != 0;
+        }
+
+        if (value is bool boolValue) return boolValue;
+        if (bool.TryParse(value.ToString(), out bool parsed)) return parsed;
+        if (int.TryParse(value.ToString(), out int parsedIntFallback)) return parsedIntFallback != 0;
+        return true;
+    }
+
+    public void SetAutoUploadToGoogleDrive(bool enabled)
+    {
+        _settings["AutoUploadToGoogleDrive"] = enabled;
         SaveSettings();
     }
 

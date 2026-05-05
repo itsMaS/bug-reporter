@@ -118,10 +118,11 @@ public class FeedbackReportDialog : Form
         Text = "Feedback Report";
         ClientSize = new Size(dialogWidth, dialogHeight);
         StartPosition = FormStartPosition.CenterScreen;
-        FormBorderStyle = FormBorderStyle.Sizable;
-        MinimizeBox = true;
-        MaximizeBox = true;
-        MinimumSize = new Size(860, 760);
+        FormBorderStyle = FormBorderStyle.FixedDialog;
+        MinimizeBox = false;
+        MaximizeBox = false;
+        ControlBox = true;
+        MinimumSize = new Size(dialogWidth, dialogHeight);
         BackColor = Bg;
         TopMost = true;
 
@@ -131,11 +132,7 @@ public class FeedbackReportDialog : Form
         var tbIcon = RecorderForm.MkLabel("⏺", 13, false, Red);             tbIcon.Location = new Point(16, 10);
         var tbText = RecorderForm.MkLabel("Feedback Report", 11, true, Tx); tbText.Location = new Point(42, 10);
         tbText.MouseDown += TitleBar_MouseDown;
-        var closeBtn = RecorderForm.MkBtn("✕", Color.Transparent, 44, 42);
-        closeBtn.Location = new Point(dialogWidth - 44, 0); closeBtn.ForeColor = Tx2;
-        closeBtn.FlatAppearance.MouseOverBackColor = Red;
-        closeBtn.Click += (_, _) => Close();
-        titleBar.Controls.AddRange(new Control[] { tbIcon, tbText, closeBtn });
+        titleBar.Controls.AddRange(new Control[] { tbIcon, tbText });
 
         // ── Path info bar (42-69) ─────────────────────────────────────────────
         Panel infoBar = new Panel { Location = new Point(0, 42), Size = new Size(dialogWidth, 26), BackColor = Surface };

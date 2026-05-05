@@ -44,6 +44,11 @@
       <CopyToPublishDirectory>Always</CopyToPublishDirectory>
       <Link>tools\ffmpeg\LICENSE.txt</Link>
     </None>
+    <None Include="tools\rclone\**\*.*" Condition="Exists('tools\\rclone')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>Always</CopyToPublishDirectory>
+      <Link>tools\rclone\%(RecursiveDir)%(Filename)%(Extension)</Link>
+    </None>
   </ItemGroup>
 
   <Target Name="WarnIfBundledFfmpegMissing" BeforeTargets="Publish">
@@ -51,6 +56,8 @@
              Condition="!Exists('tools\\ffmpeg\\bin\\ffmpeg.exe')" />
     <Warning Text="Bundled FFprobe not found at tools\ffmpeg\bin\ffprobe.exe; report metadata may fail in publish output without system PATH FFprobe."
              Condition="!Exists('tools\\ffmpeg\\bin\\ffprobe.exe')" />
+    <Warning Text="Bundled rclone not found at tools\rclone\rclone.exe; Google Drive upload/authentication features will be unavailable in publish output."
+             Condition="!Exists('tools\\rclone\\rclone.exe')" />
   </Target>
 
   <Target Name="CopyVlcRuntimeToPublish" AfterTargets="Publish">

@@ -9,9 +9,7 @@ namespace bug_reporter;
 
 public class ScreenRecorder : IDisposable
 {
-    public event Action<string>? RecordingCompleted;
-    public event Action<string>? RecordingProcessingStarted;
-    public event Action? RecordingProcessingFailed;
+    public event Action<string, TaskCompletionSource<string>>? RecordingProcessingStarted;
 
     private readonly object _stateLock = new();
     private Thread? _recordingThread;
@@ -33,6 +31,11 @@ public class ScreenRecorder : IDisposable
     private WaveFormat? _retrospectiveWaveFormat;
     private string _outputResolutionPreset = "1080p";
     private string _encodingQualityPreset = "Balanced";
+    private int _retrospectiveCaptureFailureCount = 0;
+    private long _lastRetrospectiveFailureLogTick = 0;
+
+    private const int RetrospectiveFailureLogIntervalMs = 2000;
+    private const int RetrospectiveFailureBackoffMs = 120;
 
     private const int EnumCurrentSettings = -1;
     private const int Srccopy = 0x00CC0020;
@@ -301,10 +304,26 @@ public class ScreenRecorder : IDisposable
                     _recentFrames.Enqueue(new BufferedFrame(capturedAt, imageBytes));
                     TrimRetrospectiveBufferUnsafe(capturedAt);
                 }
+
+                int recoveredFailures = Interlocked.Exchange(ref _retrospectiveCaptureFailureCount, 0);
+                if (recoveredFailures > 0)
+                {
+                    Logger.Instance.Log($"Retrospective capture recovered after {recoveredFailures} consecutive failures.");
+                }
             }
             catch (Exception ex)
             {
-                Logger.Instance.Log($"Retrospective frame capture failed: {ex.Message}");
+                int failures = Interlocked.Increment(ref _retrospectiveCaptureFailureCount);
+                long nowTick = Environment.TickCount64;
+                long previousLogTick = Interlocked.Read(ref _lastRetrospectiveFailureLogTick);
+                bool shouldLog = failures == 1 || (nowTick - previousLogTick) >= RetrospectiveFailureLogIntervalMs;
+                if (shouldLog)
+                {
+                    Interlocked.Exchange(ref _lastRetrospectiveFailureLogTick, nowTick);
+                    Logger.Instance.Log($"Retrospective frame capture failing (x{failures}): {ex.Message}");
+                }
+
+                Thread.Sleep(RetrospectiveFailureBackoffMs);
             }
 
             double remainingMilliseconds = frameInterval.TotalMilliseconds - iterationTimer.Elapsed.TotalMilliseconds;
@@ -399,8 +418,8 @@ public class ScreenRecorder : IDisposable
         string audioPath = Path.Combine(_videosFolder, $"instant_replay_{timestamp}.wav");
         string finalVideoPath = Path.Combine(_videosFolder, $"instant_replay_{timestamp}.mp4");
 
-        NotifyRecordingProcessingStarted(finalVideoPath);
-        bool completedFired = false;
+        var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        NotifyRecordingProcessingStarted(finalVideoPath, tcs);
 
         try
         {
@@ -410,6 +429,7 @@ public class ScreenRecorder : IDisposable
             if (!wroteVideo)
             {
                 Logger.Instance.Log("Retrospective save failed: no video data was written.");
+                tcs.TrySetException(new Exception("No video data was written."));
                 return;
             }
 
@@ -436,21 +456,17 @@ public class ScreenRecorder : IDisposable
                 }
 
                 Logger.Instance.Log($"Retrospective clip saved to: {finalVideoPath}");
-                NotifyRecordingCompleted(finalVideoPath);
-                completedFired = true;
+                tcs.TrySetResult(finalVideoPath);
                 return;
             }
 
             Logger.Instance.Log("Retrospective clip save failed during final encoding. Temporary files were kept.");
+            tcs.TrySetException(new Exception("Processing failed."));
         }
         catch (Exception ex)
         {
             Logger.Instance.Log($"Error saving retrospective clip: {ex.Message}");
-        }
-
-        if (!completedFired)
-        {
-            NotifyRecordingProcessingFailed();
+            tcs.TrySetException(ex);
         }
     }
 
@@ -526,6 +542,7 @@ public class ScreenRecorder : IDisposable
         string? finalVideoPath = null;
         bool processingStartedFired = false;
         bool completedFired = false;
+        TaskCompletionSource<string>? tcs = null;
         int darkFrameSamples = 0;
         int sampledFrames = 0;
 
@@ -660,7 +677,8 @@ public class ScreenRecorder : IDisposable
             StopAudioRecording();
 
             // Notify UI that processing is starting so dialog can open immediately
-            NotifyRecordingProcessingStarted(finalVideoPath!);
+            tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+            NotifyRecordingProcessingStarted(finalVideoPath!, tcs);
             processingStartedFired = true;
 
             // Merge audio and video
@@ -671,7 +689,7 @@ public class ScreenRecorder : IDisposable
                 if (muxed)
                 {
                     Logger.Instance.Log($"Video saved to: {finalVideoPath}");
-                    NotifyRecordingCompleted(finalVideoPath);
+                    tcs.TrySetResult(finalVideoPath!);
                     completedFired = true;
                 }
                 else
@@ -679,13 +697,13 @@ public class ScreenRecorder : IDisposable
                     Logger.Instance.Log("Mux failed. Falling back to raw AVI file.");
                     if (File.Exists(rawVideoPath))
                     {
-                        NotifyRecordingCompleted(rawVideoPath);
+                        tcs.TrySetResult(rawVideoPath!);
                         completedFired = true;
                     }
                     else
                     {
                         Logger.Instance.Log("Raw AVI file also missing. Recording completely failed.");
-                        NotifyRecordingProcessingFailed();
+                        tcs.TrySetException(new Exception("Processing failed."));
                         completedFired = true;
                     }
                 }
@@ -696,13 +714,13 @@ public class ScreenRecorder : IDisposable
                 if (!string.IsNullOrWhiteSpace(rawVideoPath) && File.Exists(rawVideoPath))
                 {
                     Logger.Instance.Log("Falling back to raw AVI file.");
-                    NotifyRecordingCompleted(rawVideoPath);
+                    tcs.TrySetResult(rawVideoPath!);
                     completedFired = true;
                 }
                 else
                 {
                     Logger.Instance.Log("Raw AVI file missing. Recording completely failed.");
-                    NotifyRecordingProcessingFailed();
+                    tcs.TrySetException(new Exception("Processing failed."));
                     completedFired = true;
                 }
             }
@@ -715,7 +733,7 @@ public class ScreenRecorder : IDisposable
         {
             if (processingStartedFired && !completedFired)
             {
-                NotifyRecordingProcessingFailed();
+                tcs?.TrySetException(new Exception("Processing failed."));
             }
 
             try
@@ -1093,39 +1111,16 @@ public class ScreenRecorder : IDisposable
         return true;
     }
 
-    private void NotifyRecordingCompleted(string videoPath)
+    private void NotifyRecordingProcessingStarted(string expectedPath, TaskCompletionSource<string> tcs)
     {
         try
         {
-            RecordingCompleted?.Invoke(videoPath);
-        }
-        catch (Exception ex)
-        {
-            Logger.Instance.Log($"RecordingCompleted handler failed: {ex.Message}");
-        }
-    }
-
-    private void NotifyRecordingProcessingStarted(string expectedPath)
-    {
-        try
-        {
-            RecordingProcessingStarted?.Invoke(expectedPath);
+            RecordingProcessingStarted?.Invoke(expectedPath, tcs);
         }
         catch (Exception ex)
         {
             Logger.Instance.Log($"RecordingProcessingStarted handler failed: {ex.Message}");
-        }
-    }
-
-    private void NotifyRecordingProcessingFailed()
-    {
-        try
-        {
-            RecordingProcessingFailed?.Invoke();
-        }
-        catch (Exception ex)
-        {
-            Logger.Instance.Log($"RecordingProcessingFailed handler failed: {ex.Message}");
+            tcs.TrySetException(ex);
         }
     }
 

@@ -4,6 +4,7 @@ using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Globalization;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 
 namespace bug_reporter;
 
@@ -68,7 +69,6 @@ public partial class RecorderForm : Form
     private KeyboardListener? _keyboardListener;
     private SettingsManager? _settings;
     private NotifyIcon? _notifyIcon;
-    private TaskCompletionSource<string>? _videoTcs;
     private PreviewReportsForm? _previewForm;
 
     private Label? _statusLabel;
@@ -153,10 +153,7 @@ public partial class RecorderForm : Form
         var tbName = MkLabel("Bug Reporter", 11, true, TextColor); tbName.Location = new Point(42, 11);
         tbName.MouseDown += TitleBar_MouseDown;
 
-        var minBtn   = MkBtn("─", Color.Transparent, 44, 42); minBtn.Location   = new Point(712, 0); minBtn.ForeColor   = Text2Color; minBtn.FlatAppearance.MouseOverBackColor   = Surface2Color; minBtn.Click += (_, _) => MinimizeToTray();
-        var closeBtn = MkBtn("✕", Color.Transparent, 44, 42); closeBtn.Location = new Point(756, 0); closeBtn.ForeColor = Text2Color; closeBtn.FlatAppearance.MouseOverBackColor = RedColor;     closeBtn.Click += (_, _) => Close();
-
-        titleBar.Controls.AddRange(new Control[] { tbIcon, tbName, minBtn, closeBtn });
+        titleBar.Controls.AddRange(new Control[] { tbIcon, tbName });
 
         // 2. Status area (42-121)
         Panel statusPanel = new Panel { Location = new Point(0, 42), Size = new Size(800, 80), BackColor = BgColor };
@@ -270,7 +267,21 @@ public partial class RecorderForm : Form
         Logger.Instance.Log("Application started");
     }
 
-    private static void AppendLog(TextBox b, string m) { b.AppendText(m + Environment.NewLine); b.SelectionStart = b.Text.Length; b.ScrollToCaret(); }
+    private static void AppendLog(TextBox b, string m)
+    {
+        const int maxLogLines = 2000;
+
+        b.AppendText(m + Environment.NewLine);
+
+        if (b.Lines.Length > maxLogLines)
+        {
+            string[] retained = b.Lines.Skip(b.Lines.Length - maxLogLines).ToArray();
+            b.Lines = retained;
+        }
+
+        b.SelectionStart = b.Text.Length;
+        b.ScrollToCaret();
+    }
 
     private static void EnableHiddenScrollbarScrolling(TextBox box)
     {
@@ -317,9 +328,7 @@ public partial class RecorderForm : Form
     {
         _settings = new SettingsManager();
         _recorder = new ScreenRecorder();
-        _recorder.RecordingCompleted         += Recorder_RecordingCompleted;
         _recorder.RecordingProcessingStarted += Recorder_RecordingProcessingStarted;
-        _recorder.RecordingProcessingFailed  += Recorder_RecordingProcessingFailed;
         _keyboardListener = new KeyboardListener();
 
         int savedKeyCode   = _settings.GetRecordingKeyCode();
@@ -428,7 +437,7 @@ public partial class RecorderForm : Form
 
         if (_previewForm == null || _previewForm.IsDisposed)
         {
-            _previewForm = new PreviewReportsForm(folder);
+            _previewForm = new PreviewReportsForm(folder, _settings);
             _previewForm.FormClosed += (_, _) => _previewForm = null;
             _previewForm.Show(this);
             return;
@@ -483,13 +492,12 @@ public partial class RecorderForm : Form
     }
 
     // ── Recorder events ───────────────────────────────────────────────────────
-    private void Recorder_RecordingProcessingStarted(string expectedVideoPath)
+    private void Recorder_RecordingProcessingStarted(string expectedVideoPath, TaskCompletionSource<string> tcs)
     {
         if (IsDisposed) return;
-        if (InvokeRequired) { BeginInvoke(() => Recorder_RecordingProcessingStarted(expectedVideoPath)); return; }
+        if (InvokeRequired) { BeginInvoke(() => Recorder_RecordingProcessingStarted(expectedVideoPath, tcs)); return; }
         _keyboardListener?.StopListening();
-        _videoTcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
-        Task<string> videoTask = _videoTcs.Task;
+        Task<string> videoTask = tcs.Task;
         List<string> contextFiles = _settings?.GetContextFilePaths() ?? new List<string>();
         ShowWindow();
         using var dlg = new FeedbackReportDialog(expectedVideoPath, videoTask, contextFiles);
@@ -510,18 +518,6 @@ public partial class RecorderForm : Form
         if (!IsDisposed) RestartKeyboardListener();
     }
 
-    private void Recorder_RecordingProcessingFailed()
-    {
-        _videoTcs?.TrySetException(new Exception("Processing failed."));
-        _videoTcs = null;
-    }
-
-    private void Recorder_RecordingCompleted(string videoPath)
-    {
-        _videoTcs?.TrySetResult(videoPath);
-        _videoTcs = null;
-    }
-
     private async Task FinalizeSubmittedReportAsync(Task<string> videoTask, string title, string description, bool hasTrimSelection, double trimStartSeconds, double trimEndSeconds)
     {
         try
@@ -530,6 +526,7 @@ public partial class RecorderForm : Form
             string finalizedInputPath = ApplyTrimIfRequested(videoPath, hasTrimSelection, trimStartSeconds, trimEndSeconds);
             string finalPath = ApplyReportMetadataAndRename(finalizedInputPath, title, description);
             Logger.Instance.Log($"Report submission finalized: {finalPath}");
+            _ = Task.Run(() => SyncReportToGoogleDrive(finalPath, "report finalization"));
             RefreshPreviewIfOpen();
         }
         catch (Exception ex)
@@ -613,20 +610,6 @@ public partial class RecorderForm : Form
 
         string renamedPath = GetUniqueFilePath(outputFolder, $"{safeTitle} [{timestamp}]", extension);
 
-        if (!string.Equals(extension, ".mp4", StringComparison.OrdinalIgnoreCase))
-        {
-            File.Move(videoPath, renamedPath, overwrite: false);
-            return renamedPath;
-        }
-
-        string ffmpegPath = FindFfmpegPath();
-        if (string.IsNullOrWhiteSpace(ffmpegPath))
-        {
-            Logger.Instance.Log("FFmpeg not found during report finalization. Falling back to rename only.");
-            File.Move(videoPath, renamedPath, overwrite: false);
-            return renamedPath;
-        }
-
         // Build context JSON from configured context files
         var contextData = new Dictionary<string, object>();
         foreach (var filePath in (_settings?.GetContextFilePaths() ?? new List<string>()))
@@ -653,45 +636,9 @@ public partial class RecorderForm : Form
             catch (Exception ex) { Logger.Instance.Log($"Could not read context file {filePath}: {ex.Message}"); }
         }
 
-        string metadataJson = JsonSerializer.Serialize(new
-        {
-            Title       = title,
-            Description = description,
-            Context     = contextData
-        });
-
-        // Write FFmpeg metadata to a temp file to avoid command-line length limits
-        string tempMeta   = Path.Combine(Path.GetTempPath(), $"bgrep_{Guid.NewGuid():N}.ffmeta");
-        string tempOutput = Path.Combine(outputFolder, $"report_finalize_{Guid.NewGuid():N}.mp4");
-        try
-        {
-            var sb = new System.Text.StringBuilder();
-            sb.AppendLine(";FFMETADATA1");
-            sb.AppendLine($"title={EscapeFfmpegMetadataValue(title)}");
-            sb.AppendLine($"description={EscapeFfmpegMetadataValue(description)}");
-            sb.AppendLine($"comment={EscapeFfmpegMetadataValue(metadataJson)}");
-            // ffmetadata parser is strict: write UTF-8 without BOM and sanitized values.
-            File.WriteAllText(tempMeta, sb.ToString(), new System.Text.UTF8Encoding(false));
-
-            string arguments =
-                $"-y -i \"{videoPath}\" -i \"{tempMeta}\" -map 0:v? -map 0:a? -map_metadata 1 -c copy \"{tempOutput}\"";
-
-            if (!RunProcess(ffmpegPath, arguments, out string ffmpegError))
-            {
-                Logger.Instance.Log($"Metadata embedding failed. Falling back to rename only: {ffmpegError}");
-                if (File.Exists(tempOutput)) File.Delete(tempOutput);
-                File.Move(videoPath, renamedPath, overwrite: false);
-                return renamedPath;
-            }
-
-            File.Delete(videoPath);
-            File.Move(tempOutput, renamedPath, overwrite: false);
-            return renamedPath;
-        }
-        finally
-        {
-            if (File.Exists(tempMeta)) File.Delete(tempMeta);
-        }
+        File.Move(videoPath, renamedPath, overwrite: false);
+        WriteReportSidecarJson(renamedPath, title, description, contextData, link: string.Empty);
+        return renamedPath;
     }
 
     private static string ReadFileSafe(string path, int maxBytes = 65536)
@@ -756,6 +703,133 @@ public partial class RecorderForm : Form
         return (value ?? string.Empty)
             .Replace("\\", "\\\\")
             .Replace("\"", "\\\"");
+    }
+
+    private static void WriteReportSidecarJson(string videoPath, string title, string description, Dictionary<string, object> contextData, string link)
+    {
+        string jsonPath = Path.ChangeExtension(videoPath, ".json");
+        var root = new JsonObject
+        {
+            ["Title"] = title ?? string.Empty,
+            ["Description"] = description ?? string.Empty,
+            ["Context"] = JsonSerializer.SerializeToNode(contextData) ?? new JsonObject(),
+            ["link"] = link ?? string.Empty
+        };
+
+        string json = root.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
+        File.WriteAllText(jsonPath, json);
+    }
+
+    private static void UpsertReportLinkField(string videoPath, string link)
+    {
+        if (string.IsNullOrWhiteSpace(videoPath) || string.IsNullOrWhiteSpace(link))
+            return;
+
+        string jsonPath = Path.ChangeExtension(videoPath, ".json");
+        JsonObject root;
+
+        try
+        {
+            if (File.Exists(jsonPath))
+            {
+                string existing = File.ReadAllText(jsonPath);
+                root = JsonNode.Parse(existing) as JsonObject ?? new JsonObject();
+            }
+            else
+            {
+                root = new JsonObject
+                {
+                    ["Title"] = Path.GetFileNameWithoutExtension(videoPath),
+                    ["Description"] = string.Empty,
+                    ["Context"] = new JsonObject()
+                };
+            }
+        }
+        catch
+        {
+            root = new JsonObject
+            {
+                ["Title"] = Path.GetFileNameWithoutExtension(videoPath),
+                ["Description"] = string.Empty,
+                ["Context"] = new JsonObject()
+            };
+        }
+
+        root["link"] = link;
+        string json = root.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
+        File.WriteAllText(jsonPath, json);
+    }
+
+    private void SyncReportToGoogleDrive(string videoPath, string reason)
+    {
+        try
+        {
+            if (_settings == null)
+                return;
+
+            if (!_settings.GetAutoUploadToGoogleDrive())
+                return;
+
+            if (string.IsNullOrWhiteSpace(videoPath) || !File.Exists(videoPath))
+            {
+                Logger.Instance.Log($"Drive sync skipped ({reason}): report file missing: {videoPath}");
+                return;
+            }
+
+            string remoteName = _settings.GetRcloneRemoteName();
+            if (!RcloneManager.IsRemoteConfigured(remoteName, out string remoteError))
+            {
+                Logger.Instance.Log($"Drive sync skipped ({reason}): {remoteError}");
+                return;
+            }
+
+            string driveFolder = _settings.GetRcloneDriveFolder();
+            if (!RcloneManager.CopyFileToRemote(videoPath, remoteName, driveFolder, out string stdOut, out string stdErr))
+            {
+                string trimmedError = string.IsNullOrWhiteSpace(stdErr) ? "unknown error" : stdErr.Trim();
+                Logger.Instance.Log($"Drive sync failed ({reason}): {trimmedError}");
+                return;
+            }
+
+            string fileName = Path.GetFileName(videoPath);
+            if (!RcloneManager.TryGetRemoteFileLink(remoteName, driveFolder, fileName, out string link, out string linkError))
+            {
+                Logger.Instance.Log($"Drive link skipped for {fileName}: {linkError}");
+                return;
+            }
+
+            UpsertReportLinkField(videoPath, link);
+
+            string jsonPath = Path.ChangeExtension(videoPath, ".json");
+            if (!File.Exists(jsonPath))
+            {
+                Logger.Instance.Log($"Drive JSON sync skipped ({reason}): sidecar missing for {fileName}");
+            }
+            else if (!RcloneManager.CopyFileToRemote(jsonPath, remoteName, driveFolder, out _, out string jsonErr))
+            {
+                string trimmedJsonError = string.IsNullOrWhiteSpace(jsonErr) ? "unknown error" : jsonErr.Trim();
+                Logger.Instance.Log($"Drive JSON re-upload failed ({reason}): {trimmedJsonError}");
+            }
+
+            if (!string.IsNullOrWhiteSpace(stdOut))
+            {
+                string snippet = string.Join(Environment.NewLine, stdOut
+                    .Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
+                    .Take(3));
+                if (!string.IsNullOrWhiteSpace(snippet))
+                    Logger.Instance.Log($"Drive sync completed ({reason}): {snippet}");
+                else
+                    Logger.Instance.Log($"Drive sync completed ({reason}).");
+            }
+            else
+            {
+                Logger.Instance.Log($"Drive sync completed ({reason}).");
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.Instance.Log($"Drive sync failed ({reason}): {ex.Message}");
+        }
     }
 
     private void RefreshPreviewIfOpen()
@@ -941,9 +1015,7 @@ public partial class RecorderForm : Form
         _keyboardListener?.StopListening();
         if (_recorder != null)
         {
-            _recorder.RecordingCompleted         -= Recorder_RecordingCompleted;
             _recorder.RecordingProcessingStarted -= Recorder_RecordingProcessingStarted;
-            _recorder.RecordingProcessingFailed  -= Recorder_RecordingProcessingFailed;
         }
         _recorder?.Dispose();
         _notifyIcon?.Dispose();

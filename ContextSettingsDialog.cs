@@ -40,10 +40,10 @@ public class ContextSettingsDialog : Form
         Text = "Settings";
         ClientSize = new Size(680, 520);
         StartPosition = FormStartPosition.CenterParent;
-        FormBorderStyle = FormBorderStyle.Sizable;
-        MinimizeBox = true;
-        MaximizeBox = true;
-        MinimumSize = new Size(700, 560);
+        FormBorderStyle = FormBorderStyle.FixedDialog;
+        MinimizeBox = false;
+        MaximizeBox = false;
+        ControlBox = true;
         BackColor = Bg;
 
         // ── Title bar ──────────────────────────────────────────────────────────
@@ -51,11 +51,7 @@ public class ContextSettingsDialog : Form
         titleBar.MouseDown += TitleBar_MouseDown;
         var tbText = RecorderForm.MkLabel("Settings", 11, true, Tx); tbText.Location = new Point(20, 11);
         tbText.MouseDown += TitleBar_MouseDown;
-        var closeBtn = RecorderForm.MkBtn("✕", Color.Transparent, 44, 42);
-        closeBtn.Location = new Point(636, 0); closeBtn.ForeColor = Tx2;
-        closeBtn.FlatAppearance.MouseOverBackColor = Red;
-        closeBtn.Click += (_, _) => Close();
-        titleBar.Controls.AddRange(new Control[] { tbText, closeBtn });
+        titleBar.Controls.AddRange(new Control[] { tbText });
 
         // ── Output folder section (43-132) ────────────────────────────────────
         Panel folderPanel = new Panel { Location = new Point(0, 43), Size = new Size(680, 90), BackColor = Bg };
