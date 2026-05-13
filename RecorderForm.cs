@@ -3,6 +3,9 @@ using System.Drawing;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Globalization;
+using System.Net;
+using System.Net.Http.Headers;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
@@ -69,7 +72,6 @@ public partial class RecorderForm : Form
     private KeyboardListener? _keyboardListener;
     private SettingsManager? _settings;
     private NotifyIcon? _notifyIcon;
-    private PreviewReportsForm? _previewForm;
 
     private Label? _statusLabel;
     private Label? _statusDot;
@@ -88,9 +90,10 @@ public partial class RecorderForm : Form
     private Button? _stopButton;
     private Button? _saveClipButton;
     private Button? _openFolderButton;
-    private Button? _previewButton;
     private Button? _changeKeyButton;
     private Button? _changeSaveClipKeyButton;
+
+    private const long MaxApiVideoBytes = 4 * 1024 * 1024;
 
     public RecorderForm()
     {
@@ -235,10 +238,9 @@ public partial class RecorderForm : Form
         _stopButton  = MkBtn("■  Stop",  RedColor,   130, 40); _stopButton.Location  = new Point(16, 12); _stopButton.Visible = false; _stopButton.Click += StopButton_Click;
         _saveClipButton   = MkBtn("◉  Save Clip",   PurpleColor, 122, 40); _saveClipButton.Location   = new Point(154, 12); _saveClipButton.Click += SaveClipButton_Click;
         _openFolderButton = MkBtn("📁  Folder",      Surface2Color, 112, 40); _openFolderButton.Location = new Point(284, 12); _openFolderButton.ForeColor = Text2Color; _openFolderButton.Click += OpenFolderButton_Click;
-        _previewButton    = MkBtn("▶  Preview",      Surface2Color, 118, 40); _previewButton.Location    = new Point(404, 12); _previewButton.ForeColor = Text2Color; _previewButton.Click += PreviewButton_Click;
-        var trayBtn = MkBtn("⎕  Minimize to Tray", Surface2Color, 170, 40); trayBtn.Location = new Point(530, 12); trayBtn.ForeColor = Text2Color; trayBtn.Click += (_, _) => MinimizeToTray();
+        var trayBtn = MkBtn("⎕  Minimize to Tray", Surface2Color, 170, 40); trayBtn.Location = new Point(404, 12); trayBtn.ForeColor = Text2Color; trayBtn.Click += (_, _) => MinimizeToTray();
 
-        actPanel.Controls.AddRange(new Control[] { _startButton, _stopButton, _saveClipButton, _openFolderButton, _previewButton, trayBtn });
+        actPanel.Controls.AddRange(new Control[] { _startButton, _stopButton, _saveClipButton, _openFolderButton, trayBtn });
 
         // 5. Log area (275-599)
         Panel logPanel = new Panel { Location = new Point(0, 275), Size = new Size(800, 325), BackColor = BgColor };
@@ -413,14 +415,24 @@ public partial class RecorderForm : Form
         _keyboardListener?.StopListening();
         string currentFolder  = _settings!.GetOutputFolder();
         var    currentFiles   = _settings.GetContextFilePaths();
-        using var dlg = new ContextSettingsDialog(currentFolder, currentFiles);
+        using var dlg = new ContextSettingsDialog(
+            currentFolder,
+            currentFiles,
+            _settings.GetFeedbackApiEndpoint(),
+            _settings.GetFeedbackApiKey(),
+            _settings.GetFeedbackApiBuildId(),
+            _settings.GetFeedbackApiBuildVersion());
         if (dlg.ShowDialog(this) == DialogResult.OK)
         {
             _settings.SetOutputFolder(dlg.OutputFolder);
             _settings.SetContextFilePaths(dlg.ContextFilePaths);
+            _settings.SetFeedbackApiEndpoint(dlg.ApiEndpoint);
+            _settings.SetFeedbackApiKey(dlg.ApiKey);
+            _settings.SetFeedbackApiBuildId(dlg.BuildId);
+            _settings.SetFeedbackApiBuildVersion(dlg.BuildVersion);
             if (!string.IsNullOrWhiteSpace(dlg.OutputFolder))
                 _recorder!.SetOutputFolder(dlg.OutputFolder);
-            Logger.Instance.Log($"Settings saved. Output folder: {dlg.OutputFolder}. Context files: {dlg.ContextFilePaths.Count}");
+            Logger.Instance.Log($"Settings saved. Output folder: {dlg.OutputFolder}. Context files: {dlg.ContextFilePaths.Count}. API endpoint configured: {!string.IsNullOrWhiteSpace(dlg.ApiEndpoint)}");
         }
         RestartKeyboardListener();
     }
@@ -428,29 +440,6 @@ public partial class RecorderForm : Form
     private void StartButton_Click(object? sender, EventArgs e)    { if (_recorder?.StartRecording() == true) UpdateUI(true);  }
     private void StopButton_Click(object? sender, EventArgs e)     { if (_recorder?.StopRecording()  == true) UpdateUI(false); }
     private void SaveClipButton_Click(object? sender, EventArgs e) => _recorder?.SaveRecentClip();
-    private void PreviewButton_Click(object? sender, EventArgs e)
-    {
-        string configured = _settings?.GetOutputFolder() ?? "";
-        string folder = string.IsNullOrWhiteSpace(configured)
-            ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyVideos), "ScreenRecordings")
-            : configured;
-
-        if (_previewForm == null || _previewForm.IsDisposed)
-        {
-            _previewForm = new PreviewReportsForm(folder, _settings);
-            _previewForm.FormClosed += (_, _) => _previewForm = null;
-            _previewForm.Show(this);
-            return;
-        }
-
-        if (_previewForm.WindowState == FormWindowState.Minimized)
-        {
-            _previewForm.WindowState = FormWindowState.Normal;
-        }
-
-        _previewForm.BringToFront();
-        _previewForm.Activate();
-    }
 
     private void RetrospectiveDurationInput_ValueChanged(object? sender, EventArgs e)
     {
@@ -499,6 +488,7 @@ public partial class RecorderForm : Form
         _keyboardListener?.StopListening();
         Task<string> videoTask = tcs.Task;
         List<string> contextFiles = _settings?.GetContextFilePaths() ?? new List<string>();
+        JsonObject contextSnapshot = CaptureContextSnapshot(contextFiles);
         ShowWindow();
         using var dlg = new FeedbackReportDialog(expectedVideoPath, videoTask, contextFiles);
         DialogResult result = dlg.ShowDialog(this);
@@ -506,10 +496,11 @@ public partial class RecorderForm : Form
         {
             string title = dlg.ReportTitle;
             string description = dlg.ReportDescription;
+            string severity = dlg.ReportSeverity;
             double trimStartSeconds = dlg.TrimStartSeconds;
             double trimEndSeconds = dlg.TrimEndSeconds;
             bool hasTrimSelection = dlg.HasTrimSelection;
-            _ = Task.Run(() => FinalizeSubmittedReportAsync(videoTask, title, description, hasTrimSelection, trimStartSeconds, trimEndSeconds));
+            _ = Task.Run(() => FinalizeSubmittedReportAsync(videoTask, title, description, severity, contextSnapshot, hasTrimSelection, trimStartSeconds, trimEndSeconds));
         }
         else
         {
@@ -518,20 +509,61 @@ public partial class RecorderForm : Form
         if (!IsDisposed) RestartKeyboardListener();
     }
 
-    private async Task FinalizeSubmittedReportAsync(Task<string> videoTask, string title, string description, bool hasTrimSelection, double trimStartSeconds, double trimEndSeconds)
+    private async Task FinalizeSubmittedReportAsync(
+        Task<string> videoTask,
+        string title,
+        string description,
+        string severity,
+        JsonObject contextSnapshot,
+        bool hasTrimSelection,
+        double trimStartSeconds,
+        double trimEndSeconds)
     {
         try
         {
             string videoPath = await videoTask.ConfigureAwait(false);
             string finalizedInputPath = ApplyTrimIfRequested(videoPath, hasTrimSelection, trimStartSeconds, trimEndSeconds);
-            string finalPath = ApplyReportMetadataAndRename(finalizedInputPath, title, description);
-            Logger.Instance.Log($"Report submission finalized: {finalPath}");
-            _ = Task.Run(() => SyncReportToGoogleDrive(finalPath, "report finalization"));
-            RefreshPreviewIfOpen();
+            string safeTitle = string.IsNullOrWhiteSpace(title) ? "Untitled Report" : title.Trim();
+            string safeDescription = string.IsNullOrWhiteSpace(description) ? "No description provided." : description.Trim();
+            string normalizedSeverity = string.IsNullOrWhiteSpace(severity) ? "medium" : severity.Trim().ToLowerInvariant();
+            string finalPath = MoveReportToOutputFolder(finalizedInputPath, safeTitle);
+
+            string? videoPathForUpload = finalPath;
+            if (File.Exists(finalPath))
+            {
+                long sizeBytes = new FileInfo(finalPath).Length;
+                if (sizeBytes > MaxApiVideoBytes)
+                {
+                    videoPathForUpload = null;
+                    Logger.Instance.Log($"API submission: video exceeds 4MB ({sizeBytes} bytes). Submitting report without video.");
+                }
+            }
+
+            ApiSubmitResult submitResult = await SubmitReportToApiWithRetryAsync(
+                safeTitle,
+                safeDescription,
+                normalizedSeverity,
+                contextSnapshot,
+                videoPathForUpload).ConfigureAwait(false);
+
+            LogApiResponsePayload(submitResult);
+
+            WriteReportSidecarJson(finalPath, safeTitle, safeDescription, normalizedSeverity, contextSnapshot, submitResult);
+
+            if (submitResult.Success)
+            {
+                Logger.Instance.Log($"Report submitted successfully to API ({submitResult.StatusCode}). File: {finalPath}");
+            }
+            else
+            {
+                Logger.Instance.Log($"Report submission failed. Status={submitResult.StatusCode}, Error={submitResult.ErrorMessage}");
+                ShowSubmissionMessage($"Report submission failed. {submitResult.ErrorMessage}", "Submission Failed", MessageBoxIcon.Warning);
+            }
         }
         catch (Exception ex)
         {
             Logger.Instance.Log($"Report submission finalization failed: {ex.Message}");
+            ShowSubmissionMessage($"Report submission failed: {ex.Message}", "Submission Failed", MessageBoxIcon.Error);
         }
     }
 
@@ -596,7 +628,7 @@ public partial class RecorderForm : Form
         }
     }
 
-    private string ApplyReportMetadataAndRename(string videoPath, string title, string description)
+    private string MoveReportToOutputFolder(string videoPath, string title)
     {
         string safeTitle  = SanitizeFileNameSegment(string.IsNullOrWhiteSpace(title) ? "Untitled Report" : title);
         string timestamp  = ExtractRecordingTimestamp(videoPath);
@@ -609,35 +641,11 @@ public partial class RecorderForm : Form
         if (!Directory.Exists(outputFolder)) Directory.CreateDirectory(outputFolder);
 
         string renamedPath = GetUniqueFilePath(outputFolder, $"{safeTitle} [{timestamp}]", extension);
-
-        // Build context JSON from configured context files
-        var contextData = new Dictionary<string, object>();
-        foreach (var filePath in (_settings?.GetContextFilePaths() ?? new List<string>()))
+        if (!string.Equals(videoPath, renamedPath, StringComparison.OrdinalIgnoreCase))
         {
-            if (!File.Exists(filePath)) continue;
-            try
-            {
-                string raw = ReadFileSafe(filePath);
-                string ext = Path.GetExtension(filePath).ToLowerInvariant();
-                if (ext == ".json")
-                {
-                    try
-                    {
-                        var parsed = System.Text.Json.JsonDocument.Parse(raw);
-                        contextData[Path.GetFileName(filePath)] = parsed.RootElement.Clone();
-                    }
-                    catch { contextData[Path.GetFileName(filePath)] = raw; }
-                }
-                else
-                {
-                    contextData[Path.GetFileName(filePath)] = raw;
-                }
-            }
-            catch (Exception ex) { Logger.Instance.Log($"Could not read context file {filePath}: {ex.Message}"); }
+            File.Move(videoPath, renamedPath, overwrite: false);
         }
 
-        File.Move(videoPath, renamedPath, overwrite: false);
-        WriteReportSidecarJson(renamedPath, title, description, contextData, link: string.Empty);
         return renamedPath;
     }
 
@@ -705,162 +713,202 @@ public partial class RecorderForm : Form
             .Replace("\"", "\\\"");
     }
 
-    private static void WriteReportSidecarJson(string videoPath, string title, string description, Dictionary<string, object> contextData, string link)
+    private static void WriteReportSidecarJson(
+        string videoPath,
+        string title,
+        string description,
+        string severity,
+        JsonObject contextSnapshot,
+        ApiSubmitResult submitResult)
     {
         string jsonPath = Path.ChangeExtension(videoPath, ".json");
         var root = new JsonObject
         {
             ["Title"] = title ?? string.Empty,
             ["Description"] = description ?? string.Empty,
-            ["Context"] = JsonSerializer.SerializeToNode(contextData) ?? new JsonObject(),
-            ["link"] = link ?? string.Empty
+            ["Severity"] = severity ?? "medium",
+            ["Context"] = contextSnapshot,
+            ["submittedToApi"] = submitResult.Success,
+            ["statusCode"] = submitResult.StatusCode,
+            ["response"] = submitResult.ResponseBody,
+            ["error"] = submitResult.ErrorMessage,
+            ["submittedAtUtc"] = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture)
         };
 
         string json = root.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
         File.WriteAllText(jsonPath, json);
     }
 
-    private static void UpsertReportLinkField(string videoPath, string link)
+    private JsonObject CaptureContextSnapshot(List<string> contextFiles)
     {
-        if (string.IsNullOrWhiteSpace(videoPath) || string.IsNullOrWhiteSpace(link))
-            return;
-
-        string jsonPath = Path.ChangeExtension(videoPath, ".json");
-        JsonObject root;
-
-        try
+        var filesNode = new JsonObject();
+        foreach (string filePath in contextFiles)
         {
-            if (File.Exists(jsonPath))
+            if (string.IsNullOrWhiteSpace(filePath) || !File.Exists(filePath))
+                continue;
+
+            try
             {
-                string existing = File.ReadAllText(jsonPath);
-                root = JsonNode.Parse(existing) as JsonObject ?? new JsonObject();
-            }
-            else
-            {
-                root = new JsonObject
+                string raw = ReadFileSafe(filePath);
+                string fileName = Path.GetFileName(filePath);
+                string ext = Path.GetExtension(filePath).ToLowerInvariant();
+                if (ext == ".json")
                 {
-                    ["Title"] = Path.GetFileNameWithoutExtension(videoPath),
-                    ["Description"] = string.Empty,
-                    ["Context"] = new JsonObject()
-                };
-            }
-        }
-        catch
-        {
-            root = new JsonObject
-            {
-                ["Title"] = Path.GetFileNameWithoutExtension(videoPath),
-                ["Description"] = string.Empty,
-                ["Context"] = new JsonObject()
-            };
-        }
-
-        root["link"] = link;
-        string json = root.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
-        File.WriteAllText(jsonPath, json);
-    }
-
-    private void SyncReportToGoogleDrive(string videoPath, string reason)
-    {
-        try
-        {
-            if (_settings == null)
-                return;
-
-            if (!_settings.GetAutoUploadToGoogleDrive())
-                return;
-
-            if (string.IsNullOrWhiteSpace(videoPath) || !File.Exists(videoPath))
-            {
-                Logger.Instance.Log($"Drive sync skipped ({reason}): report file missing: {videoPath}");
-                return;
-            }
-
-            string remoteName = _settings.GetRcloneRemoteName();
-            if (!RcloneManager.IsRemoteConfigured(remoteName, out string remoteError))
-            {
-                Logger.Instance.Log($"Drive sync skipped ({reason}): {remoteError}");
-                return;
-            }
-
-            string driveFolder = _settings.GetRcloneDriveFolder();
-            if (!RcloneManager.CopyFileToRemote(videoPath, remoteName, driveFolder, out string stdOut, out string stdErr))
-            {
-                string trimmedError = string.IsNullOrWhiteSpace(stdErr) ? "unknown error" : stdErr.Trim();
-                Logger.Instance.Log($"Drive sync failed ({reason}): {trimmedError}");
-                return;
-            }
-
-            string fileName = Path.GetFileName(videoPath);
-            if (!RcloneManager.TryGetRemoteFileLink(remoteName, driveFolder, fileName, out string link, out string linkError))
-            {
-                Logger.Instance.Log($"Drive link skipped for {fileName}: {linkError}");
-                return;
-            }
-
-            UpsertReportLinkField(videoPath, link);
-
-            string jsonPath = Path.ChangeExtension(videoPath, ".json");
-            if (!File.Exists(jsonPath))
-            {
-                Logger.Instance.Log($"Drive JSON sync skipped ({reason}): sidecar missing for {fileName}");
-            }
-            else if (!RcloneManager.CopyFileToRemote(jsonPath, remoteName, driveFolder, out _, out string jsonErr))
-            {
-                string trimmedJsonError = string.IsNullOrWhiteSpace(jsonErr) ? "unknown error" : jsonErr.Trim();
-                Logger.Instance.Log($"Drive JSON re-upload failed ({reason}): {trimmedJsonError}");
-            }
-
-            if (!string.IsNullOrWhiteSpace(stdOut))
-            {
-                string snippet = string.Join(Environment.NewLine, stdOut
-                    .Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
-                    .Take(3));
-                if (!string.IsNullOrWhiteSpace(snippet))
-                    Logger.Instance.Log($"Drive sync completed ({reason}): {snippet}");
+                    try
+                    {
+                        var parsed = JsonNode.Parse(raw);
+                        filesNode[fileName] = parsed;
+                    }
+                    catch
+                    {
+                        filesNode[fileName] = raw;
+                    }
+                }
                 else
-                    Logger.Instance.Log($"Drive sync completed ({reason}).");
+                {
+                    filesNode[fileName] = raw;
+                }
             }
-            else
+            catch (Exception ex)
             {
-                Logger.Instance.Log($"Drive sync completed ({reason}).");
+                Logger.Instance.Log($"Context capture skipped for {filePath}: {ex.Message}");
             }
         }
-        catch (Exception ex)
+
+        return new JsonObject
         {
-            Logger.Instance.Log($"Drive sync failed ({reason}): {ex.Message}");
-        }
+            ["platform"] = Environment.Is64BitOperatingSystem ? "win64" : "win32",
+            ["os_version"] = Environment.OSVersion.VersionString,
+            ["machine_name"] = Environment.MachineName,
+            ["captured_at_utc"] = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture),
+            ["files"] = filesNode
+        };
     }
 
-    private void RefreshPreviewIfOpen()
+    private async Task<ApiSubmitResult> SubmitReportToApiWithRetryAsync(
+        string title,
+        string description,
+        string severity,
+        JsonObject contextSnapshot,
+        string? videoPath)
+    {
+        if (_settings == null)
+        {
+            return new ApiSubmitResult(false, null, string.Empty, "Internal settings are not initialized.");
+        }
+
+        string endpoint = _settings.GetFeedbackApiEndpoint();
+        if (string.IsNullOrWhiteSpace(endpoint))
+        {
+            return new ApiSubmitResult(false, null, string.Empty, "API endpoint is not configured. Open Settings and set the endpoint URL.");
+        }
+
+        if (!Uri.TryCreate(endpoint, UriKind.Absolute, out Uri? endpointUri))
+        {
+            return new ApiSubmitResult(false, null, string.Empty, "API endpoint URL is invalid.");
+        }
+
+        string apiKey = _settings.GetFeedbackApiKey();
+        if (string.IsNullOrWhiteSpace(apiKey))
+        {
+            return new ApiSubmitResult(false, null, string.Empty, "API key is not configured. Open Settings and set X-API-Key.");
+        }
+
+        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+        client.DefaultRequestHeaders.Add("X-API-Key", apiKey);
+
+        for (int attempt = 1; attempt <= 3; attempt++)
+        {
+            try
+            {
+                using var form = new MultipartFormDataContent();
+                string buildId = _settings.GetFeedbackApiBuildId();
+                string buildVersion = _settings.GetFeedbackApiBuildVersion();
+
+                if (!string.IsNullOrWhiteSpace(buildId)) form.Add(new StringContent(buildId, Encoding.UTF8), "buildId");
+                if (!string.IsNullOrWhiteSpace(buildVersion)) form.Add(new StringContent(buildVersion, Encoding.UTF8), "buildVersion");
+                if (!string.IsNullOrWhiteSpace(title)) form.Add(new StringContent(title, Encoding.UTF8), "title");
+                form.Add(new StringContent(description, Encoding.UTF8), "description");
+                form.Add(new StringContent(severity, Encoding.UTF8), "severity");
+                form.Add(new StringContent(contextSnapshot.ToJsonString(), Encoding.UTF8), "context");
+
+                if (!string.IsNullOrWhiteSpace(videoPath) && File.Exists(videoPath))
+                {
+                    var stream = File.OpenRead(videoPath);
+                    var videoContent = new StreamContent(stream);
+                    videoContent.Headers.ContentType = new MediaTypeHeaderValue("video/mp4");
+                    form.Add(videoContent, "video", Path.GetFileName(videoPath));
+                }
+
+                using HttpResponseMessage response = await client.PostAsync(endpointUri, form).ConfigureAwait(false);
+                string body = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+
+                if (response.StatusCode == HttpStatusCode.Unauthorized)
+                {
+                    return new ApiSubmitResult(false, (int)response.StatusCode, body, "Unauthorized (401). Check API key configuration.");
+                }
+
+                if ((int)response.StatusCode >= 500)
+                {
+                    if (attempt < 3)
+                    {
+                        int backoffSeconds = 1 << (attempt - 1);
+                        Logger.Instance.Log($"API submission attempt {attempt} failed with {(int)response.StatusCode}. Retrying in {backoffSeconds}s.");
+                        await Task.Delay(TimeSpan.FromSeconds(backoffSeconds)).ConfigureAwait(false);
+                        continue;
+                    }
+
+                    return new ApiSubmitResult(false, (int)response.StatusCode, body, $"Server error {(int)response.StatusCode}.");
+                }
+
+                if (response.IsSuccessStatusCode)
+                {
+                    return new ApiSubmitResult(true, (int)response.StatusCode, body, string.Empty);
+                }
+
+                return new ApiSubmitResult(false, (int)response.StatusCode, body, $"HTTP {(int)response.StatusCode}.");
+            }
+            catch (Exception ex)
+            {
+                if (attempt >= 3)
+                {
+                    return new ApiSubmitResult(false, null, string.Empty, $"Network error: {ex.Message}");
+                }
+
+                int backoffSeconds = 1 << (attempt - 1);
+                Logger.Instance.Log($"API submission attempt {attempt} failed with network error. Retrying in {backoffSeconds}s.");
+                await Task.Delay(TimeSpan.FromSeconds(backoffSeconds)).ConfigureAwait(false);
+            }
+        }
+
+        return new ApiSubmitResult(false, null, string.Empty, "Submission failed after retries.");
+    }
+
+    private void ShowSubmissionMessage(string message, string caption, MessageBoxIcon icon)
     {
         if (IsDisposed) return;
         if (InvokeRequired)
         {
-            BeginInvoke((Action)RefreshPreviewIfOpen);
+            BeginInvoke(() => ShowSubmissionMessage(message, caption, icon));
             return;
         }
 
-        if (_previewForm == null || _previewForm.IsDisposed) return;
-        _previewForm.RefreshReports();
+        MessageBox.Show(this, message, caption, MessageBoxButtons.OK, icon);
     }
 
-    private static string EscapeFfmpegMetadataValue(string value)
+    private static void LogApiResponsePayload(ApiSubmitResult submitResult)
     {
-        // FFmpeg metadata file format: escape = ; # \ and flatten control chars/newlines.
-        string cleaned = new string((value ?? string.Empty)
-            .Where(ch => ch == '\t' || ch >= ' ')
-            .ToArray());
+        string statusText = submitResult.StatusCode?.ToString(CultureInfo.InvariantCulture) ?? "(no status)";
+        string payload = string.IsNullOrWhiteSpace(submitResult.ResponseBody)
+            ? "<empty response body>"
+            : submitResult.ResponseBody;
 
-        return cleaned
-            .Replace("\\", "\\\\")
-            .Replace("=", "\\=")
-            .Replace(";", "\\;")
-            .Replace("#", "\\#")
-            .Replace("\r\n", " ")
-            .Replace("\n", " ")
-            .Replace("\r", " ");
+        string logLine = $"API response payload (status {statusText}): {payload}";
+        Logger.Instance.Log(logLine);
+        Console.WriteLine(logLine);
     }
+
+    private sealed record ApiSubmitResult(bool Success, int? StatusCode, string ResponseBody, string ErrorMessage);
 
     private static string FindFfmpegPath()
     {

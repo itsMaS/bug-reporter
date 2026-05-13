@@ -55,6 +55,7 @@ public class FeedbackReportDialog : Form
     private readonly Panel _trimStartHandle;
     private readonly Panel _trimEndHandle;
     private readonly TextBox _titleTextBox;
+    private readonly ComboBox _severityComboBox;
     private readonly TextBox _descriptionTextBox;
     private readonly Panel _dataTabsBar;
     private readonly Panel _dataContentPanel;
@@ -92,6 +93,7 @@ public class FeedbackReportDialog : Form
 
     public string ReportTitle => _titleTextBox.Text.Trim();
     public string ReportDescription => _descriptionTextBox.Text.Trim();
+    public string ReportSeverity => (_severityComboBox.SelectedItem?.ToString() ?? "medium").ToLowerInvariant();
     public double TrimStartSeconds => _seekBar.Enabled ? _trimStartMs / 1000.0 : 0;
     public double TrimEndSeconds => _seekBar.Enabled ? _trimEndMs / 1000.0 : 0;
     public bool HasTrimSelection => _seekBar.Enabled && (_trimStartMs > 0 || _trimEndMs < _seekBar.Maximum);
@@ -198,17 +200,31 @@ public class FeedbackReportDialog : Form
             Font = new Font("Segoe UI", 10), BackColor = Surface, ForeColor = Tx, BorderStyle = BorderStyle.None
         };
 
-        var tabLbl = RecorderForm.MkLabel("DATA SOURCES", 7.5f, true); tabLbl.Location = new Point(20, 74);
+        var severityLbl = RecorderForm.MkLabel("SEVERITY", 7.5f, true); severityLbl.Location = new Point(20, 72);
+        _severityComboBox = new ComboBox
+        {
+            Location = new Point(20, 88),
+            Size = new Size(180, 26),
+            DropDownStyle = ComboBoxStyle.DropDownList,
+            Font = new Font("Segoe UI", 9),
+            BackColor = Surface2,
+            ForeColor = Tx,
+            FlatStyle = FlatStyle.Flat
+        };
+        _severityComboBox.Items.AddRange(new object[] { "medium", "low", "high", "critical" });
+        _severityComboBox.SelectedIndex = 0;
+
+        var tabLbl = RecorderForm.MkLabel("DATA SOURCES", 7.5f, true); tabLbl.Location = new Point(20, 124);
         _dataTabsBar = new Panel
         {
-            Location = new Point(20, 90),
+            Location = new Point(20, 140),
             Size = new Size(dialogWidth - 40, 30),
             BackColor = Bg
         };
         _dataContentPanel = new Panel
         {
-            Location = new Point(20, 122),
-            Size = new Size(dialogWidth - 40, 254),
+            Location = new Point(20, 172),
+            Size = new Size(dialogWidth - 40, 204),
             BackColor = Bg
         };
 
@@ -229,7 +245,7 @@ public class FeedbackReportDialog : Form
         AddContextPreviewTabs(contextFilePaths);
         ShowDataTab("description");
 
-        fieldsPanel.Controls.AddRange(new Control[] { titleLbl, _titleTextBox, tabLbl, _dataTabsBar, _dataContentPanel });
+        fieldsPanel.Controls.AddRange(new Control[] { titleLbl, _titleTextBox, severityLbl, _severityComboBox, tabLbl, _dataTabsBar, _dataContentPanel });
 
         // ── Bottom bar (804-863, 60px) ─────────────────────────────────────────
         Panel bottomBar = new Panel { Location = new Point(0, 804), Size = new Size(dialogWidth, 60), BackColor = Surface };

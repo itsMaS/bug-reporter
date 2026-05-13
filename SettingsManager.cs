@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Security.Cryptography;
 
 namespace bug_reporter;
 
@@ -56,9 +57,10 @@ public class SettingsManager
             { "RetrospectiveDurationSeconds", 15 },
             { "OutputFolder", "" },
             { "ContextFilePaths", new List<string>() },
-            { "RcloneRemoteName", "gdrive" },
-            { "RcloneDriveFolder", "BugReporter" },
-            { "AutoUploadToGoogleDrive", true }
+            { "FeedbackApiEndpoint", "" },
+            { "FeedbackApiBuildId", "" },
+            { "FeedbackApiBuildVersion", "" },
+            { "FeedbackApiKeyEncrypted", "" }
         };
     }
 
@@ -194,54 +196,48 @@ public class SettingsManager
         SaveSettings();
     }
 
-    public string GetRcloneRemoteName()
+    public string GetFeedbackApiEndpoint()
     {
-        string value = GetStringSetting("RcloneRemoteName", "gdrive").Trim();
-        return string.IsNullOrWhiteSpace(value) ? "gdrive" : value;
+        return GetStringSetting("FeedbackApiEndpoint", "").Trim();
     }
 
-    public void SetRcloneRemoteName(string remoteName)
+    public void SetFeedbackApiEndpoint(string endpoint)
     {
-        string value = (remoteName ?? string.Empty).Trim();
-        _settings["RcloneRemoteName"] = string.IsNullOrWhiteSpace(value) ? "gdrive" : value;
+        _settings["FeedbackApiEndpoint"] = (endpoint ?? string.Empty).Trim();
         SaveSettings();
     }
 
-    public string GetRcloneDriveFolder()
+    public string GetFeedbackApiBuildId()
     {
-        string value = GetStringSetting("RcloneDriveFolder", "BugReporter").Trim();
-        return value.Replace('\\', '/').Trim('/');
+        return GetStringSetting("FeedbackApiBuildId", "").Trim();
     }
 
-    public void SetRcloneDriveFolder(string driveFolder)
+    public void SetFeedbackApiBuildId(string buildId)
     {
-        string value = (driveFolder ?? string.Empty).Trim().Replace('\\', '/').Trim('/');
-        _settings["RcloneDriveFolder"] = string.IsNullOrWhiteSpace(value) ? "BugReporter" : value;
+        _settings["FeedbackApiBuildId"] = (buildId ?? string.Empty).Trim();
         SaveSettings();
     }
 
-    public bool GetAutoUploadToGoogleDrive()
+    public string GetFeedbackApiBuildVersion()
     {
-        if (!_settings.TryGetValue("AutoUploadToGoogleDrive", out object? value) || value == null)
-            return true;
-
-        if (value is JsonElement element)
-        {
-            if (element.ValueKind == JsonValueKind.True) return true;
-            if (element.ValueKind == JsonValueKind.False) return false;
-            if (element.ValueKind == JsonValueKind.String && bool.TryParse(element.GetString(), out bool parsedString)) return parsedString;
-            if (element.ValueKind == JsonValueKind.Number && element.TryGetInt32(out int parsedInt)) return parsedInt != 0;
-        }
-
-        if (value is bool boolValue) return boolValue;
-        if (bool.TryParse(value.ToString(), out bool parsed)) return parsed;
-        if (int.TryParse(value.ToString(), out int parsedIntFallback)) return parsedIntFallback != 0;
-        return true;
+        return GetStringSetting("FeedbackApiBuildVersion", "").Trim();
     }
 
-    public void SetAutoUploadToGoogleDrive(bool enabled)
+    public void SetFeedbackApiBuildVersion(string buildVersion)
     {
-        _settings["AutoUploadToGoogleDrive"] = enabled;
+        _settings["FeedbackApiBuildVersion"] = (buildVersion ?? string.Empty).Trim();
+        SaveSettings();
+    }
+
+    public string GetFeedbackApiKey()
+    {
+        string encryptedValue = GetStringSetting("FeedbackApiKeyEncrypted", "");
+        return DecryptSecret(encryptedValue);
+    }
+
+    public void SetFeedbackApiKey(string apiKey)
+    {
+        _settings["FeedbackApiKeyEncrypted"] = EncryptSecret((apiKey ?? string.Empty).Trim());
         SaveSettings();
     }
 
@@ -286,5 +282,39 @@ public class SettingsManager
         }
 
         return value.ToString() ?? defaultValue;
+    }
+
+    private static string EncryptSecret(string plainText)
+    {
+        if (string.IsNullOrWhiteSpace(plainText))
+            return string.Empty;
+
+        try
+        {
+            byte[] data = System.Text.Encoding.UTF8.GetBytes(plainText);
+            byte[] encrypted = ProtectedData.Protect(data, null, DataProtectionScope.CurrentUser);
+            return Convert.ToBase64String(encrypted);
+        }
+        catch
+        {
+            return string.Empty;
+        }
+    }
+
+    private static string DecryptSecret(string encryptedValue)
+    {
+        if (string.IsNullOrWhiteSpace(encryptedValue))
+            return string.Empty;
+
+        try
+        {
+            byte[] encrypted = Convert.FromBase64String(encryptedValue);
+            byte[] data = ProtectedData.Unprotect(encrypted, null, DataProtectionScope.CurrentUser);
+            return System.Text.Encoding.UTF8.GetString(data);
+        }
+        catch
+        {
+            return string.Empty;
+        }
     }
 }

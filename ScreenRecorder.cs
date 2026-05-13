@@ -27,6 +27,7 @@ public class ScreenRecorder : IDisposable
     private int _retrospectiveDurationSeconds = 15;
     private Thread? _retrospectiveThread;
     private volatile bool _retrospectiveEnabled = true;
+    private volatile bool _retrospectiveSuspended = false;
     private WasapiLoopbackCapture? _retrospectiveLoopbackCapture;
     private WaveFormat? _retrospectiveWaveFormat;
     private string _outputResolutionPreset = "1080p";
@@ -39,7 +40,6 @@ public class ScreenRecorder : IDisposable
 
     private const int EnumCurrentSettings = -1;
     private const int Srccopy = 0x00CC0020;
-    private const int CaptureBlt = 0x40000000;
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Ansi)]
     private struct DevMode
@@ -290,6 +290,12 @@ public class ScreenRecorder : IDisposable
             TimeSpan frameInterval = TimeSpan.FromMilliseconds(1000.0 / clipFps);
             Stopwatch iterationTimer = Stopwatch.StartNew();
 
+            if (_retrospectiveSuspended)
+            {
+                Thread.Sleep((int)Math.Max(1, frameInterval.TotalMilliseconds));
+                continue;
+            }
+
             try
             {
                 Screen screen = _selectedScreen ?? Screen.PrimaryScreen!;
@@ -358,6 +364,11 @@ public class ScreenRecorder : IDisposable
 
             _retrospectiveLoopbackCapture.DataAvailable += (s, e) =>
             {
+                if (_retrospectiveSuspended)
+                {
+                    return;
+                }
+
                 byte[] audioBytes = new byte[e.BytesRecorded];
                 Buffer.BlockCopy(e.Buffer, 0, audioBytes, 0, e.BytesRecorded);
                 DateTime capturedAt = DateTime.UtcNow;
@@ -548,6 +559,9 @@ public class ScreenRecorder : IDisposable
 
         try
         {
+            _retrospectiveSuspended = true;
+            Logger.Instance.Log("Retrospective capture suspended while active recording runs.");
+
             Logger.Instance.Log("RecordingLoop started");
             
             string timestamp = DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss");
@@ -731,6 +745,9 @@ public class ScreenRecorder : IDisposable
         }
         finally
         {
+            _retrospectiveSuspended = false;
+            Logger.Instance.Log("Retrospective capture resumed.");
+
             if (processingStartedFired && !completedFired)
             {
                 tcs?.TrySetException(new Exception("Processing failed."));
@@ -854,9 +871,9 @@ public class ScreenRecorder : IDisposable
             (string x264Preset, int crf, int mpegQ) = GetEncodingParams();
             string[] ffmpegArguments =
             {
-                $"-y -i \"{ffmpegRawInputPath}\" -i \"{ffmpegAudioInputPath}\" -vf \"{filter}\" -c:v libx264 -preset {x264Preset} -crf {crf} -color_range pc -r {RecordingFps} -c:a aac -b:a 128k -movflags +faststart -shortest \"{outputPath}\"",
-                $"-y -i \"{ffmpegRawInputPath}\" -i \"{ffmpegAudioInputPath}\" -vf \"{filter}\" -c:v libx264 -preset veryfast -crf 24 -r {RecordingFps} -c:a aac -b:a 128k -movflags +faststart -shortest \"{outputPath}\"",
-                $"-y -i \"{ffmpegRawInputPath}\" -i \"{ffmpegAudioInputPath}\" -vf \"{filter}\" -c:v mpeg4 -q:v {mpegQ} -r {RecordingFps} -c:a aac -shortest \"{outputPath}\""
+                $"-y -color_range mpeg -i \"{ffmpegRawInputPath}\" -i \"{ffmpegAudioInputPath}\" -vf \"{filter}\" -c:v libx264 -preset {x264Preset} -crf {crf} -color_range pc -r {RecordingFps} -c:a aac -b:a 128k -movflags +faststart -shortest \"{outputPath}\"",
+                $"-y -color_range mpeg -i \"{ffmpegRawInputPath}\" -i \"{ffmpegAudioInputPath}\" -vf \"{filter}\" -c:v libx264 -preset veryfast -crf 24 -r {RecordingFps} -c:a aac -b:a 128k -movflags +faststart -shortest \"{outputPath}\"",
+                $"-y -color_range mpeg -i \"{ffmpegRawInputPath}\" -i \"{ffmpegAudioInputPath}\" -vf \"{filter}\" -c:v mpeg4 -q:v {mpegQ} -r {RecordingFps} -c:a aac -b:a 128k -movflags +faststart -shortest \"{outputPath}\""
             };
 
             bool muxSucceeded = false;
@@ -1241,43 +1258,50 @@ public class ScreenRecorder : IDisposable
     {
         Bitmap bitmap = new Bitmap(width, height, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
         using Graphics graphics = Graphics.FromImage(bitmap);
-        IntPtr hdcDest = graphics.GetHdc();
-        IntPtr hdcSrc = IntPtr.Zero;
 
         try
         {
-            // Use BitBlt + CAPTUREBLT for better compatibility with fullscreen/layered windows.
-            hdcSrc = GetDC(IntPtr.Zero);
-            bool copied = hdcSrc != IntPtr.Zero && BitBlt(
-                hdcDest,
-                0,
-                0,
-                width,
-                height,
-                hdcSrc,
-                x,
-                y,
-                Srccopy | CaptureBlt
-            );
-
-            // Fallback path if BitBlt fails.
-            if (!copied)
-            {
-                graphics.ReleaseHdc(hdcDest);
-                hdcDest = IntPtr.Zero;
-                graphics.CopyFromScreen(x, y, 0, 0, new System.Drawing.Size(width, height), CopyPixelOperation.SourceCopy | CopyPixelOperation.CaptureBlt);
-            }
+            // Prefer CopyFromScreen with SourceCopy to avoid desktop flicker side effects.
+            graphics.CopyFromScreen(x, y, 0, 0, new System.Drawing.Size(width, height), CopyPixelOperation.SourceCopy);
         }
-        finally
+        catch
         {
-            if (hdcSrc != IntPtr.Zero)
-            {
-                ReleaseDC(IntPtr.Zero, hdcSrc);
-            }
+            IntPtr hdcDest = IntPtr.Zero;
+            IntPtr hdcSrc = IntPtr.Zero;
 
-            if (hdcDest != IntPtr.Zero)
+            try
             {
-                graphics.ReleaseHdc(hdcDest);
+                // Fallback to direct BitBlt without CAPTUREBLT.
+                hdcDest = graphics.GetHdc();
+                hdcSrc = GetDC(IntPtr.Zero);
+                bool copied = hdcSrc != IntPtr.Zero && BitBlt(
+                    hdcDest,
+                    0,
+                    0,
+                    width,
+                    height,
+                    hdcSrc,
+                    x,
+                    y,
+                    Srccopy
+                );
+
+                if (!copied)
+                {
+                    throw new InvalidOperationException("Screen capture failed in both primary and fallback modes.");
+                }
+            }
+            finally
+            {
+                if (hdcSrc != IntPtr.Zero)
+                {
+                    ReleaseDC(IntPtr.Zero, hdcSrc);
+                }
+
+                if (hdcDest != IntPtr.Zero)
+                {
+                    graphics.ReleaseHdc(hdcDest);
+                }
             }
         }
 

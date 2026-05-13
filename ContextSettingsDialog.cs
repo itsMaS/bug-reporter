@@ -21,9 +21,17 @@ public class ContextSettingsDialog : Form
     private static Color Red     => RecorderForm.RedColor;
 
     private readonly TextBox _outputFolderBox;
+    private readonly TextBox _apiEndpointBox;
+    private readonly TextBox _apiKeyBox;
+    private readonly TextBox _buildIdBox;
+    private readonly TextBox _buildVersionBox;
     private readonly ListBox _filesList;
 
     public string OutputFolder => _outputFolderBox.Text.Trim();
+    public string ApiEndpoint => _apiEndpointBox.Text.Trim();
+    public string ApiKey => _apiKeyBox.Text.Trim();
+    public string BuildId => _buildIdBox.Text.Trim();
+    public string BuildVersion => _buildVersionBox.Text.Trim();
 
     public List<string> ContextFilePaths
     {
@@ -35,10 +43,16 @@ public class ContextSettingsDialog : Form
         }
     }
 
-    public ContextSettingsDialog(string currentOutputFolder, List<string> currentContextFiles)
+    public ContextSettingsDialog(
+        string currentOutputFolder,
+        List<string> currentContextFiles,
+        string currentApiEndpoint,
+        string currentApiKey,
+        string currentBuildId,
+        string currentBuildVersion)
     {
         Text = "Settings";
-        ClientSize = new Size(680, 520);
+        ClientSize = new Size(680, 660);
         StartPosition = FormStartPosition.CenterParent;
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MinimizeBox = false;
@@ -78,30 +92,78 @@ public class ContextSettingsDialog : Form
         // ── Divider ───────────────────────────────────────────────────────────
         Panel div1 = new Panel { Location = new Point(0, 133), Size = new Size(680, 1), BackColor = Surface2 };
 
-        // ── Context files section (134-443) ───────────────────────────────────
-        Panel filesPanel = new Panel { Location = new Point(0, 134), Size = new Size(680, 310), BackColor = Bg };
+        // ── API section (134-309) ─────────────────────────────────────────────
+        Panel apiPanel = new Panel { Location = new Point(0, 134), Size = new Size(680, 176), BackColor = Bg };
+        var apiLbl = RecorderForm.MkLabel("API SUBMISSION", 7.5f, true); apiLbl.Location = new Point(20, 12);
+        var apiHint = RecorderForm.MkLabel("Reports are submitted directly to this endpoint as multipart/form-data", 8f, false, Tx2);
+        apiHint.Location = new Point(20, 28); apiHint.MaximumSize = new Size(640, 18);
+
+        var endpointLbl = RecorderForm.MkLabel("ENDPOINT URL", 7.5f, true); endpointLbl.Location = new Point(20, 52);
+        _apiEndpointBox = new TextBox
+        {
+            Location = new Point(20, 68), Size = new Size(640, 26),
+            Font = new Font("Segoe UI", 9), BackColor = Surface2, ForeColor = Tx,
+            BorderStyle = BorderStyle.None, Text = currentApiEndpoint ?? string.Empty
+        };
+
+        var keyLbl = RecorderForm.MkLabel("X-API-KEY", 7.5f, true); keyLbl.Location = new Point(20, 100);
+        _apiKeyBox = new TextBox
+        {
+            Location = new Point(20, 116), Size = new Size(640, 26),
+            Font = new Font("Segoe UI", 9), BackColor = Surface2, ForeColor = Tx,
+            BorderStyle = BorderStyle.None, UseSystemPasswordChar = true,
+            Text = currentApiKey ?? string.Empty
+        };
+
+        apiPanel.Controls.AddRange(new Control[] { apiLbl, apiHint, endpointLbl, _apiEndpointBox, keyLbl, _apiKeyBox });
+
+        // ── Divider ───────────────────────────────────────────────────────────
+        Panel divApi = new Panel { Location = new Point(0, 310), Size = new Size(680, 1), BackColor = Surface2 };
+
+        // ── Build metadata section (311-386) ─────────────────────────────────
+        Panel buildPanel = new Panel { Location = new Point(0, 311), Size = new Size(680, 76), BackColor = Bg };
+        var buildLbl = RecorderForm.MkLabel("BUILD METADATA (OPTIONAL)", 7.5f, true); buildLbl.Location = new Point(20, 12);
+        _buildIdBox = new TextBox
+        {
+            Location = new Point(20, 36), Size = new Size(310, 26),
+            Font = new Font("Segoe UI", 9), BackColor = Surface2, ForeColor = Tx,
+            BorderStyle = BorderStyle.None, PlaceholderText = "buildId", Text = currentBuildId ?? string.Empty
+        };
+        _buildVersionBox = new TextBox
+        {
+            Location = new Point(350, 36), Size = new Size(310, 26),
+            Font = new Font("Segoe UI", 9), BackColor = Surface2, ForeColor = Tx,
+            BorderStyle = BorderStyle.None, PlaceholderText = "buildVersion", Text = currentBuildVersion ?? string.Empty
+        };
+        buildPanel.Controls.AddRange(new Control[] { buildLbl, _buildIdBox, _buildVersionBox });
+
+        // ── Divider ───────────────────────────────────────────────────────────
+        Panel divBuild = new Panel { Location = new Point(0, 387), Size = new Size(680, 1), BackColor = Surface2 };
+
+        // ── Context files section (388-583) ───────────────────────────────────
+        Panel filesPanel = new Panel { Location = new Point(0, 388), Size = new Size(680, 196), BackColor = Bg };
         var filesLbl = RecorderForm.MkLabel("CONTEXT FILES", 7.5f, true); filesLbl.Location = new Point(20, 12);
-        var filesHint = RecorderForm.MkLabel("Contents of these files will be embedded in the report video metadata when submitted", 8f, false, Tx2);
+        var filesHint = RecorderForm.MkLabel("Contents are captured when the report dialog opens and sent in the context JSON field", 8f, false, Tx2);
         filesHint.Location = new Point(20, 28); filesHint.MaximumSize = new Size(640, 18);
 
         _filesList = new ListBox
         {
-            Location = new Point(20, 52), Size = new Size(640, 210),
+            Location = new Point(20, 52), Size = new Size(640, 96),
             Font = new Font("Segoe UI", 9), BackColor = Surface, ForeColor = Tx,
             BorderStyle = BorderStyle.None, SelectionMode = SelectionMode.One
         };
         foreach (var path in currentContextFiles) _filesList.Items.Add(path);
 
-        var addBtn    = RecorderForm.MkBtn("+ Add File",       Blue,     108, 30); addBtn.Location    = new Point(20,  270); addBtn.Click += AddFile_Click;
-        var removeBtn = RecorderForm.MkBtn("Remove Selected",  Red,      140, 30); removeBtn.Location = new Point(136, 270); removeBtn.Click += RemoveFile_Click;
+        var addBtn    = RecorderForm.MkBtn("+ Add File",      Blue, 108, 30); addBtn.Location    = new Point(20,  156); addBtn.Click += AddFile_Click;
+        var removeBtn = RecorderForm.MkBtn("Remove Selected", Red,  140, 30); removeBtn.Location = new Point(136, 156); removeBtn.Click += RemoveFile_Click;
 
         filesPanel.Controls.AddRange(new Control[] { filesLbl, filesHint, _filesList, addBtn, removeBtn });
 
         // ── Divider ───────────────────────────────────────────────────────────
-        Panel div2 = new Panel { Location = new Point(0, 444), Size = new Size(680, 1), BackColor = Surface2 };
+        Panel div2 = new Panel { Location = new Point(0, 584), Size = new Size(680, 1), BackColor = Surface2 };
 
-        // ── Bottom bar (445-519) ──────────────────────────────────────────────
-        Panel bottomBar = new Panel { Location = new Point(0, 445), Size = new Size(680, 75), BackColor = Surface };
+        // ── Bottom bar (585-659) ──────────────────────────────────────────────
+        Panel bottomBar = new Panel { Location = new Point(0, 585), Size = new Size(680, 75), BackColor = Surface };
         var saveBtn   = RecorderForm.MkBtn("Save",   Green, 110, 40); saveBtn.Location   = new Point(450, 17); saveBtn.DialogResult   = DialogResult.OK;
         var cancelBtn = RecorderForm.MkBtn("Cancel", Red,   110, 40); cancelBtn.Location = new Point(568, 17); cancelBtn.DialogResult = DialogResult.Cancel;
         bottomBar.Controls.AddRange(new Control[] { saveBtn, cancelBtn });
@@ -109,7 +171,7 @@ public class ContextSettingsDialog : Form
         AcceptButton = saveBtn;
         CancelButton = cancelBtn;
 
-        Controls.AddRange(new Control[] { titleBar, folderPanel, div1, filesPanel, div2, bottomBar });
+        Controls.AddRange(new Control[] { titleBar, folderPanel, div1, apiPanel, divApi, buildPanel, divBuild, filesPanel, div2, bottomBar });
     }
 
     private void TitleBar_MouseDown(object? sender, MouseEventArgs e)
