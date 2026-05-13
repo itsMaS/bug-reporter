@@ -142,14 +142,14 @@ public partial class RecorderForm : Form
             AutoSize = true
         };
 
-    private static Panel MkDiv(int y) =>
-        new Panel { Location = new Point(0, y), Size = new Size(800, 1), BackColor = Surface2Color };
+    private static Panel MkDiv() =>
+        new Panel { Height = 1, Dock = DockStyle.Top, BackColor = Surface2Color };
 
     // ── SetupUI ───────────────────────────────────────────────────────────────
     private void SetupUI()
     {
-        // 1. Title bar (0-41)
-        Panel titleBar = new Panel { Location = new Point(0, 0), Size = new Size(800, 42), BackColor = SurfaceColor };
+        // 1. Title bar – Dock.Top (added last so it appears at the top)
+        Panel titleBar = new Panel { Height = 42, Dock = DockStyle.Top, BackColor = SurfaceColor };
         titleBar.MouseDown += TitleBar_MouseDown;
 
         var tbIcon = MkLabel("⏺", 13, false, RedColor);   tbIcon.Location = new Point(16, 10);
@@ -158,19 +158,19 @@ public partial class RecorderForm : Form
 
         titleBar.Controls.AddRange(new Control[] { tbIcon, tbName });
 
-        // 2. Status area (42-121)
-        Panel statusPanel = new Panel { Location = new Point(0, 42), Size = new Size(800, 80), BackColor = BgColor };
+        // 2. Status area – Dock.Top
+        Panel statusPanel = new Panel { Height = 80, Dock = DockStyle.Top, BackColor = BgColor };
 
-        _statusDot         = MkLabel("●", 22, false, GreenColor);                                        _statusDot.Location         = new Point(24, 16);
-        _statusLabel       = MkLabel("IDLE", 20, true, TextColor);                                       _statusLabel.Location       = new Point(62, 18);
-        _instructionsLabel = MkLabel("Press F11 to start/stop recording  ·  Press F10 to save last 15s", 9, false, Text2Color); _instructionsLabel.Location = new Point(64, 56);
+        _statusDot         = MkLabel("●", 22, false, GreenColor);  _statusDot.Location         = new Point(24, 16);
+        _statusLabel       = MkLabel("IDLE", 20, true, TextColor); _statusLabel.Location       = new Point(62, 18);
+        _instructionsLabel = MkLabel("Press F2 to start/stop recording  ·  Press 3 to save last 10s", 9, false, Text2Color); _instructionsLabel.Location = new Point(64, 56);
 
         statusPanel.Controls.AddRange(new Control[] { _statusDot, _statusLabel, _instructionsLabel });
 
-        // 3. Config strip (123-209)
-        Panel cfgPanel = new Panel { Location = new Point(0, 123), Size = new Size(800, 86), BackColor = SurfaceColor };
+        // 3. Config strip – Dock.Top, two proper rows with breathing room
+        Panel cfgPanel = new Panel { Height = 104, Dock = DockStyle.Top, BackColor = SurfaceColor };
 
-        var monLbl = MkLabel("MONITOR", 7.5f, true); monLbl.Location = new Point(20, 7);
+        var monLbl = MkLabel("MONITOR", 7.5f, true); monLbl.Location = new Point(20, 8);
         _selectedMonitorLabel = monLbl;
         _monitorComboBox = new ComboBox
         {
@@ -181,27 +181,25 @@ public partial class RecorderForm : Form
         PopulateMonitors();
         _monitorComboBox.SelectedIndexChanged += MonitorComboBox_SelectedIndexChanged;
 
-        _recordingKeyLabel = MkLabel("RECORD KEY", 7.5f, true); _recordingKeyLabel.Location = new Point(224, 7);
-        _changeKeyButton   = MkBtn("F11", Surface2Color, 76, 26); _changeKeyButton.Location  = new Point(224, 24); _changeKeyButton.ForeColor  = OrangeColor; _changeKeyButton.Click += ChangeKeyButton_Click;
+        _recordingKeyLabel = MkLabel("RECORD KEY", 7.5f, true); _recordingKeyLabel.Location = new Point(224, 8);
+        _changeKeyButton   = MkBtn("F2", Surface2Color, 76, 26); _changeKeyButton.Location  = new Point(224, 24); _changeKeyButton.ForeColor  = OrangeColor; _changeKeyButton.Click += ChangeKeyButton_Click;
 
-        _saveClipKeyLabel        = MkLabel("CLIP KEY", 7.5f, true); _saveClipKeyLabel.Location        = new Point(316, 7);
-        _changeSaveClipKeyButton = MkBtn("F10", Surface2Color, 76, 26); _changeSaveClipKeyButton.Location = new Point(316, 24); _changeSaveClipKeyButton.ForeColor = BlueColor; _changeSaveClipKeyButton.Click += ChangeSaveClipKeyButton_Click;
+        _saveClipKeyLabel        = MkLabel("CLIP KEY", 7.5f, true); _saveClipKeyLabel.Location        = new Point(316, 8);
+        _changeSaveClipKeyButton = MkBtn("3", Surface2Color, 76, 26); _changeSaveClipKeyButton.Location = new Point(316, 24); _changeSaveClipKeyButton.ForeColor = BlueColor; _changeSaveClipKeyButton.Click += ChangeSaveClipKeyButton_Click;
 
-        _recordingFpsLabel = MkLabel("FPS", 7.5f, true); _recordingFpsLabel.Location = new Point(408, 7);
+        _recordingFpsLabel = MkLabel("FPS", 7.5f, true); _recordingFpsLabel.Location = new Point(408, 8);
         _recordingFpsInput = new NumericUpDown { Minimum = 5, Maximum = 60, Value = 30, Size = new Size(66, 26), Location = new Point(408, 24), Font = new Font("Segoe UI", 9), BackColor = Surface2Color, ForeColor = TextColor, BorderStyle = BorderStyle.None };
         _recordingFpsInput.ValueChanged += RecordingFpsInput_ValueChanged;
 
-        _retrospectiveDurationLabel = MkLabel("CLIP DURATION (s)", 7.5f, true); _retrospectiveDurationLabel.Location = new Point(490, 7);
+        _retrospectiveDurationLabel = MkLabel("CLIP DURATION (s)", 7.5f, true); _retrospectiveDurationLabel.Location = new Point(490, 8);
         _retrospectiveDurationInput = new NumericUpDown { Minimum = 5, Maximum = 120, Value = 15, Size = new Size(66, 26), Location = new Point(490, 24), Font = new Font("Segoe UI", 9), BackColor = Surface2Color, ForeColor = TextColor, BorderStyle = BorderStyle.None };
         _retrospectiveDurationInput.ValueChanged += RetrospectiveDurationInput_ValueChanged;
 
-        var settingsBtn = MkBtn("⚙  Context & Paths", Surface2Color, 148, 26); settingsBtn.Location = new Point(632, 24); settingsBtn.ForeColor = Text2Color; settingsBtn.Click += ContextSettingsButton_Click;
-        var settingsLbl = MkLabel("SETTINGS", 7.5f, true); settingsLbl.Location = new Point(632, 7);
-
-        var resolutionLbl = MkLabel("OUTPUT RESOLUTION", 7.5f, true); resolutionLbl.Location = new Point(20, 54);
+        // Row 2 – output resolution and encoding quality, properly spaced below row 1
+        var resolutionLbl = MkLabel("OUTPUT RESOLUTION", 7.5f, true); resolutionLbl.Location = new Point(20, 57);
         _outputResolutionComboBox = new ComboBox
         {
-            Size = new Size(172, 24), Location = new Point(20, 58),
+            Size = new Size(172, 24), Location = new Point(20, 72),
             DropDownStyle = ComboBoxStyle.DropDownList, Font = new Font("Segoe UI", 8.5f),
             BackColor = Surface2Color, ForeColor = TextColor, FlatStyle = FlatStyle.Flat
         };
@@ -211,10 +209,10 @@ public partial class RecorderForm : Form
         });
         _outputResolutionComboBox.SelectedIndexChanged += OutputResolutionComboBox_SelectedIndexChanged;
 
-        var qualityLbl = MkLabel("ENCODING", 7.5f, true); qualityLbl.Location = new Point(208, 54);
+        var qualityLbl = MkLabel("ENCODING", 7.5f, true); qualityLbl.Location = new Point(208, 57);
         _encodingQualityComboBox = new ComboBox
         {
-            Size = new Size(122, 24), Location = new Point(208, 58),
+            Size = new Size(122, 24), Location = new Point(208, 72),
             DropDownStyle = ComboBoxStyle.DropDownList, Font = new Font("Segoe UI", 8.5f),
             BackColor = Surface2Color, ForeColor = TextColor, FlatStyle = FlatStyle.Flat
         };
@@ -228,38 +226,48 @@ public partial class RecorderForm : Form
         {
             monLbl, _monitorComboBox, _recordingKeyLabel, _changeKeyButton, _saveClipKeyLabel, _changeSaveClipKeyButton,
             _recordingFpsLabel, _recordingFpsInput, _retrospectiveDurationLabel, _retrospectiveDurationInput,
-            settingsLbl, settingsBtn, resolutionLbl, _outputResolutionComboBox, qualityLbl, _encodingQualityComboBox
+            resolutionLbl, _outputResolutionComboBox, qualityLbl, _encodingQualityComboBox
         });
 
-        // 4. Actions (210-273)
-        Panel actPanel = new Panel { Location = new Point(0, 210), Size = new Size(800, 64), BackColor = BgColor };
+        // 4. Actions – Dock.Top
+        Panel actPanel = new Panel { Height = 64, Dock = DockStyle.Top, BackColor = BgColor };
 
         _startButton = MkBtn("▶  Start", GreenColor, 130, 40); _startButton.Location = new Point(16, 12); _startButton.Click += StartButton_Click;
         _stopButton  = MkBtn("■  Stop",  RedColor,   130, 40); _stopButton.Location  = new Point(16, 12); _stopButton.Visible = false; _stopButton.Click += StopButton_Click;
-        _saveClipButton   = MkBtn("◉  Save Clip",   PurpleColor, 122, 40); _saveClipButton.Location   = new Point(154, 12); _saveClipButton.Click += SaveClipButton_Click;
-        _openFolderButton = MkBtn("📁  Folder",      Surface2Color, 112, 40); _openFolderButton.Location = new Point(284, 12); _openFolderButton.ForeColor = Text2Color; _openFolderButton.Click += OpenFolderButton_Click;
-        var trayBtn = MkBtn("⎕  Minimize to Tray", Surface2Color, 170, 40); trayBtn.Location = new Point(404, 12); trayBtn.ForeColor = Text2Color; trayBtn.Click += (_, _) => MinimizeToTray();
+        _saveClipButton   = MkBtn("◉  Save Clip",   PurpleColor, 130, 40); _saveClipButton.Location   = new Point(154, 12); _saveClipButton.Click += SaveClipButton_Click;
+        _openFolderButton = MkBtn("📁  Folder",      Surface2Color, 112, 40); _openFolderButton.Location = new Point(292, 12); _openFolderButton.ForeColor = Text2Color; _openFolderButton.Click += OpenFolderButton_Click;
+        var trayBtn = MkBtn("⎕  Minimize to Tray", Surface2Color, 170, 40); trayBtn.Location = new Point(412, 12); trayBtn.ForeColor = Text2Color; trayBtn.Click += (_, _) => MinimizeToTray();
+        var settingsBtn = MkBtn("⚙", Surface2Color, 40, 40); settingsBtn.Location = new Point(590, 12); settingsBtn.ForeColor = Text2Color; settingsBtn.Click += ContextSettingsButton_Click;
 
-        actPanel.Controls.AddRange(new Control[] { _startButton, _stopButton, _saveClipButton, _openFolderButton, trayBtn });
+        actPanel.Controls.AddRange(new Control[] { _startButton, _stopButton, _saveClipButton, _openFolderButton, trayBtn, settingsBtn });
 
-        // 5. Log area (275-599)
-        Panel logPanel = new Panel { Location = new Point(0, 275), Size = new Size(800, 325), BackColor = BgColor };
-        var logLbl = MkLabel("LOGS", 7.5f, true); logLbl.Location = new Point(20, 12);
+        // 5. Log area – Dock.Fill so it grows/shrinks with the window
+        Panel logOuter = new Panel { Dock = DockStyle.Fill, BackColor = BgColor };
 
+        // Header row inside logOuter (added last → appears at top via Dock.Top)
+        Panel logHeader = new Panel { Height = 32, Dock = DockStyle.Top, BackColor = BgColor, Padding = new Padding(20, 10, 0, 0) };
+        var logLbl = MkLabel("LOGS", 7.5f, true); logLbl.Dock = DockStyle.Left;
+        logHeader.Controls.Add(logLbl);
+
+        // Content fills remaining space; Padding provides margins around the text box
+        Panel logContent = new Panel { Dock = DockStyle.Fill, BackColor = BgColor, Padding = new Padding(20, 0, 20, 16) };
         var logBox = new TextBox
         {
+            Dock = DockStyle.Fill,
             Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.None,
             Font = new Font("Consolas", 8.5f),
-            Location = new Point(20, 32), Size = new Size(760, 278),
             BackColor = SurfaceColor, ForeColor = Color.FromArgb(134, 239, 172),
             BorderStyle = BorderStyle.None
         };
         EnableHiddenScrollbarScrolling(logBox);
+        logContent.Controls.Add(logBox);
 
-        logPanel.Controls.AddRange(new Control[] { logLbl, logBox });
+        // logContent added first (back/Fill), logHeader added last (front/Top)
+        logOuter.Controls.Add(logContent);
+        logOuter.Controls.Add(logHeader);
 
-        // Assemble
-        Controls.AddRange(new Control[] { titleBar, statusPanel, MkDiv(122), cfgPanel, MkDiv(209), actPanel, MkDiv(274), logPanel });
+        // Assemble in REVERSE visual order: last added = topmost with Dock.Top
+        Controls.AddRange(new Control[] { logOuter, MkDiv(), actPanel, MkDiv(), cfgPanel, MkDiv(), statusPanel, titleBar });
 
         Logger.Instance.Subscribe(msg =>
         {
@@ -373,6 +381,7 @@ public partial class RecorderForm : Form
             Rectangle bounds = GetPhysicalBounds(screens[i]);
             string name = $"Monitor {i + 1} ({bounds.Width}×{bounds.Height})";
             if (screens[i].Primary) name += " [Primary]";
+            Logger.Instance.Log($"Found monitor {i + 1}: {screens[i].DeviceName} bounds {bounds.X},{bounds.Y} {bounds.Width}x{bounds.Height}");
             _monitorComboBox.Items.Add(new MonitorItem(screens[i], name));
         }
         _monitorComboBox.SelectedIndex = 0;
@@ -380,7 +389,35 @@ public partial class RecorderForm : Form
 
     private void MonitorComboBox_SelectedIndexChanged(object? sender, EventArgs e)
     {
-        if (_monitorComboBox!.SelectedItem is MonitorItem item) _recorder!.SetSelectedScreen(item.Screen);
+        if (_monitorComboBox!.SelectedItem is MonitorItem item)
+        {
+            Logger.Instance.Log($"Monitor selected: {item.DisplayName} (index {_monitorComboBox.SelectedIndex}) - DeviceName: {item.Screen.DeviceName}");
+            _recorder!.SetSelectedScreen(item.Screen);
+            _ = FlashMonitorBorderAsync(item.Screen);
+        }
+    }
+
+    private async Task FlashMonitorBorderAsync(Screen screen)
+    {
+        Rectangle bounds = GetPhysicalBounds(screen);
+        Logger.Instance.Log($"Flashing monitor: {screen.DeviceName} at bounds {bounds.X},{bounds.Y} {bounds.Width}x{bounds.Height}");
+        var borderForm = new MonitorBorderFlash(bounds, BlueColor);
+
+        try
+        {
+            for (int i = 0; i < 3; i++)
+            {
+                borderForm.Show();
+                await Task.Delay(250);
+                borderForm.Hide();
+                await Task.Delay(150);
+            }
+        }
+        finally
+        {
+            borderForm.Close();
+            borderForm.Dispose();
+        }
     }
 
     // ── Button handlers ───────────────────────────────────────────────────────
@@ -419,17 +456,13 @@ public partial class RecorderForm : Form
             currentFolder,
             currentFiles,
             _settings.GetFeedbackApiEndpoint(),
-            _settings.GetFeedbackApiKey(),
-            _settings.GetFeedbackApiBuildId(),
-            _settings.GetFeedbackApiBuildVersion());
+            _settings.GetFeedbackApiKey());
         if (dlg.ShowDialog(this) == DialogResult.OK)
         {
             _settings.SetOutputFolder(dlg.OutputFolder);
             _settings.SetContextFilePaths(dlg.ContextFilePaths);
             _settings.SetFeedbackApiEndpoint(dlg.ApiEndpoint);
             _settings.SetFeedbackApiKey(dlg.ApiKey);
-            _settings.SetFeedbackApiBuildId(dlg.BuildId);
-            _settings.SetFeedbackApiBuildVersion(dlg.BuildVersion);
             if (!string.IsNullOrWhiteSpace(dlg.OutputFolder))
                 _recorder!.SetOutputFolder(dlg.OutputFolder);
             Logger.Instance.Log($"Settings saved. Output folder: {dlg.OutputFolder}. Context files: {dlg.ContextFilePaths.Count}. API endpoint configured: {!string.IsNullOrWhiteSpace(dlg.ApiEndpoint)}");
@@ -500,7 +533,7 @@ public partial class RecorderForm : Form
             double trimStartSeconds = dlg.TrimStartSeconds;
             double trimEndSeconds = dlg.TrimEndSeconds;
             bool hasTrimSelection = dlg.HasTrimSelection;
-            _ = Task.Run(() => FinalizeSubmittedReportAsync(videoTask, title, description, severity, contextSnapshot, hasTrimSelection, trimStartSeconds, trimEndSeconds));
+            _ = Task.Run(() => FinalizeSubmittedReportAsync(videoTask, title, description, severity, contextSnapshot, contextFiles, hasTrimSelection, trimStartSeconds, trimEndSeconds));
         }
         else
         {
@@ -515,6 +548,7 @@ public partial class RecorderForm : Form
         string description,
         string severity,
         JsonObject contextSnapshot,
+        List<string> contextFiles,
         bool hasTrimSelection,
         double trimStartSeconds,
         double trimEndSeconds)
@@ -543,7 +577,7 @@ public partial class RecorderForm : Form
                 safeTitle,
                 safeDescription,
                 normalizedSeverity,
-                contextSnapshot,
+                contextFiles,
                 videoPathForUpload).ConfigureAwait(false);
 
             LogApiResponsePayload(submitResult);
@@ -741,47 +775,13 @@ public partial class RecorderForm : Form
 
     private JsonObject CaptureContextSnapshot(List<string> contextFiles)
     {
-        var filesNode = new JsonObject();
-        foreach (string filePath in contextFiles)
-        {
-            if (string.IsNullOrWhiteSpace(filePath) || !File.Exists(filePath))
-                continue;
-
-            try
-            {
-                string raw = ReadFileSafe(filePath);
-                string fileName = Path.GetFileName(filePath);
-                string ext = Path.GetExtension(filePath).ToLowerInvariant();
-                if (ext == ".json")
-                {
-                    try
-                    {
-                        var parsed = JsonNode.Parse(raw);
-                        filesNode[fileName] = parsed;
-                    }
-                    catch
-                    {
-                        filesNode[fileName] = raw;
-                    }
-                }
-                else
-                {
-                    filesNode[fileName] = raw;
-                }
-            }
-            catch (Exception ex)
-            {
-                Logger.Instance.Log($"Context capture skipped for {filePath}: {ex.Message}");
-            }
-        }
-
+        // Return only flat key-value metadata for indexing; context files are sent separately
         return new JsonObject
         {
             ["platform"] = Environment.Is64BitOperatingSystem ? "win64" : "win32",
             ["os_version"] = Environment.OSVersion.VersionString,
             ["machine_name"] = Environment.MachineName,
-            ["captured_at_utc"] = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture),
-            ["files"] = filesNode
+            ["captured_at_utc"] = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture)
         };
     }
 
@@ -789,7 +789,7 @@ public partial class RecorderForm : Form
         string title,
         string description,
         string severity,
-        JsonObject contextSnapshot,
+        List<string> contextFiles,
         string? videoPath)
     {
         if (_settings == null)
@@ -825,19 +825,63 @@ public partial class RecorderForm : Form
                 string buildId = _settings.GetFeedbackApiBuildId();
                 string buildVersion = _settings.GetFeedbackApiBuildVersion();
 
+                form.Add(new StringContent(description, Encoding.UTF8), "description");
+                if (!string.IsNullOrWhiteSpace(title)) form.Add(new StringContent(title, Encoding.UTF8), "title");
                 if (!string.IsNullOrWhiteSpace(buildId)) form.Add(new StringContent(buildId, Encoding.UTF8), "buildId");
                 if (!string.IsNullOrWhiteSpace(buildVersion)) form.Add(new StringContent(buildVersion, Encoding.UTF8), "buildVersion");
-                if (!string.IsNullOrWhiteSpace(title)) form.Add(new StringContent(title, Encoding.UTF8), "title");
-                form.Add(new StringContent(description, Encoding.UTF8), "description");
                 form.Add(new StringContent(severity, Encoding.UTF8), "severity");
-                form.Add(new StringContent(contextSnapshot.ToJsonString(), Encoding.UTF8), "context");
+
+                // Attach context files as separate form fields
+                Logger.Instance.Log($"Attaching {contextFiles.Count} context files...");
+                foreach (string contextFilePath in contextFiles)
+                {
+                    if (string.IsNullOrWhiteSpace(contextFilePath))
+                    {
+                        Logger.Instance.Log("Skipped blank context file path.");
+                        continue;
+                    }
+
+                    if (!File.Exists(contextFilePath))
+                    {
+                        Logger.Instance.Log($"Context file not found: {contextFilePath}");
+                        continue;
+                    }
+
+                    try
+                    {
+                        string fileName = Path.GetFileName(contextFilePath);
+                        byte[] fileBytes = File.ReadAllBytes(contextFilePath);
+                        var fileContent = new ByteArrayContent(fileBytes);
+
+                        string ext = Path.GetExtension(contextFilePath).ToLowerInvariant();
+                        string mimeType = ext switch
+                        {
+                            ".json" => "application/json",
+                            ".log" => "text/plain",
+                            ".txt" => "text/plain",
+                            ".csv" => "text/csv",
+                            ".xml" => "application/xml",
+                            _ => "application/octet-stream"
+                        };
+
+                        fileContent.Headers.ContentType = new MediaTypeHeaderValue(mimeType);
+                        // Use filename as field name to keep each file unique and avoid conflicts with context.json
+                        string fieldName = fileName;
+                        form.Add(fileContent, fieldName, fileName);
+                        Logger.Instance.Log($"Attached context file: {fileName} ({fileBytes.Length} bytes, field: {fieldName}, mime: {mimeType})");
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.Instance.Log($"Failed to attach context file {contextFilePath}: {ex.Message}");
+                    }
+                }
 
                 if (!string.IsNullOrWhiteSpace(videoPath) && File.Exists(videoPath))
                 {
                     var stream = File.OpenRead(videoPath);
                     var videoContent = new StreamContent(stream);
                     videoContent.Headers.ContentType = new MediaTypeHeaderValue("video/mp4");
-                    form.Add(videoContent, "video", Path.GetFileName(videoPath));
+                    form.Add(videoContent, "recording", Path.GetFileName(videoPath));
                 }
 
                 using HttpResponseMessage response = await client.PostAsync(endpointUri, form).ConfigureAwait(false);
@@ -1076,4 +1120,44 @@ public class MonitorItem
     public string DisplayName { get; set; }
     public MonitorItem(Screen screen, string displayName) { Screen = screen; DisplayName = displayName; }
     public override string ToString() => DisplayName;
+}
+
+public class MonitorBorderFlash : Form
+{
+    private readonly Color _borderColor;
+    private const int BorderWidth = 5;
+
+    public MonitorBorderFlash(Rectangle bounds, Color borderColor)
+    {
+        _borderColor = borderColor;
+
+        FormBorderStyle = FormBorderStyle.None;
+        BackColor = Color.Black;
+        TransparencyKey = Color.Black;
+        Location = new Point(bounds.X, bounds.Y);
+        Size = bounds.Size;
+        TopMost = true;
+        ShowInTaskbar = false;
+        ControlBox = false;
+        DoubleBuffered = true;
+        Opacity = 1.0;
+    }
+
+    protected override void OnShown(EventArgs e)
+    {
+        base.OnShown(e);
+        Invalidate();
+        Refresh();
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        base.OnPaint(e);
+        e.Graphics.Clear(Color.Black);
+        using (var pen = new Pen(_borderColor, BorderWidth))
+        {
+            int offset = BorderWidth / 2;
+            e.Graphics.DrawRectangle(pen, offset, offset, Width - BorderWidth, Height - BorderWidth);
+        }
+    }
 }

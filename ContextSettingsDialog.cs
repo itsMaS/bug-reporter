@@ -23,15 +23,11 @@ public class ContextSettingsDialog : Form
     private readonly TextBox _outputFolderBox;
     private readonly TextBox _apiEndpointBox;
     private readonly TextBox _apiKeyBox;
-    private readonly TextBox _buildIdBox;
-    private readonly TextBox _buildVersionBox;
     private readonly ListBox _filesList;
 
     public string OutputFolder => _outputFolderBox.Text.Trim();
     public string ApiEndpoint => _apiEndpointBox.Text.Trim();
     public string ApiKey => _apiKeyBox.Text.Trim();
-    public string BuildId => _buildIdBox.Text.Trim();
-    public string BuildVersion => _buildVersionBox.Text.Trim();
 
     public List<string> ContextFilePaths
     {
@@ -47,12 +43,10 @@ public class ContextSettingsDialog : Form
         string currentOutputFolder,
         List<string> currentContextFiles,
         string currentApiEndpoint,
-        string currentApiKey,
-        string currentBuildId,
-        string currentBuildVersion)
+        string currentApiKey)
     {
         Text = "Settings";
-        ClientSize = new Size(680, 660);
+        ClientSize = new Size(680, 570);
         StartPosition = FormStartPosition.CenterParent;
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MinimizeBox = false;
@@ -120,28 +114,8 @@ public class ContextSettingsDialog : Form
         // ── Divider ───────────────────────────────────────────────────────────
         Panel divApi = new Panel { Location = new Point(0, 310), Size = new Size(680, 1), BackColor = Surface2 };
 
-        // ── Build metadata section (311-386) ─────────────────────────────────
-        Panel buildPanel = new Panel { Location = new Point(0, 311), Size = new Size(680, 76), BackColor = Bg };
-        var buildLbl = RecorderForm.MkLabel("BUILD METADATA (OPTIONAL)", 7.5f, true); buildLbl.Location = new Point(20, 12);
-        _buildIdBox = new TextBox
-        {
-            Location = new Point(20, 36), Size = new Size(310, 26),
-            Font = new Font("Segoe UI", 9), BackColor = Surface2, ForeColor = Tx,
-            BorderStyle = BorderStyle.None, PlaceholderText = "buildId", Text = currentBuildId ?? string.Empty
-        };
-        _buildVersionBox = new TextBox
-        {
-            Location = new Point(350, 36), Size = new Size(310, 26),
-            Font = new Font("Segoe UI", 9), BackColor = Surface2, ForeColor = Tx,
-            BorderStyle = BorderStyle.None, PlaceholderText = "buildVersion", Text = currentBuildVersion ?? string.Empty
-        };
-        buildPanel.Controls.AddRange(new Control[] { buildLbl, _buildIdBox, _buildVersionBox });
-
-        // ── Divider ───────────────────────────────────────────────────────────
-        Panel divBuild = new Panel { Location = new Point(0, 387), Size = new Size(680, 1), BackColor = Surface2 };
-
-        // ── Context files section (388-583) ───────────────────────────────────
-        Panel filesPanel = new Panel { Location = new Point(0, 388), Size = new Size(680, 196), BackColor = Bg };
+        // ── Context files section (311-506) ───────────────────────────────────
+        Panel filesPanel = new Panel { Location = new Point(0, 311), Size = new Size(680, 196), BackColor = Bg };
         var filesLbl = RecorderForm.MkLabel("CONTEXT FILES", 7.5f, true); filesLbl.Location = new Point(20, 12);
         var filesHint = RecorderForm.MkLabel("Contents are captured when the report dialog opens and sent in the context JSON field", 8f, false, Tx2);
         filesHint.Location = new Point(20, 28); filesHint.MaximumSize = new Size(640, 18);
@@ -152,6 +126,7 @@ public class ContextSettingsDialog : Form
             Font = new Font("Segoe UI", 9), BackColor = Surface, ForeColor = Tx,
             BorderStyle = BorderStyle.None, SelectionMode = SelectionMode.One
         };
+        _filesList.DoubleClick += FilesList_DoubleClick;
         foreach (var path in currentContextFiles) _filesList.Items.Add(path);
 
         var addBtn    = RecorderForm.MkBtn("+ Add File",      Blue, 108, 30); addBtn.Location    = new Point(20,  156); addBtn.Click += AddFile_Click;
@@ -160,18 +135,18 @@ public class ContextSettingsDialog : Form
         filesPanel.Controls.AddRange(new Control[] { filesLbl, filesHint, _filesList, addBtn, removeBtn });
 
         // ── Divider ───────────────────────────────────────────────────────────
-        Panel div2 = new Panel { Location = new Point(0, 584), Size = new Size(680, 1), BackColor = Surface2 };
+        Panel div2 = new Panel { Location = new Point(0, 507), Size = new Size(680, 1), BackColor = Surface2 };
 
-        // ── Bottom bar (585-659) ──────────────────────────────────────────────
-        Panel bottomBar = new Panel { Location = new Point(0, 585), Size = new Size(680, 75), BackColor = Surface };
-        var saveBtn   = RecorderForm.MkBtn("Save",   Green, 110, 40); saveBtn.Location   = new Point(450, 17); saveBtn.DialogResult   = DialogResult.OK;
-        var cancelBtn = RecorderForm.MkBtn("Cancel", Red,   110, 40); cancelBtn.Location = new Point(568, 17); cancelBtn.DialogResult = DialogResult.Cancel;
+        // ── Bottom bar (508-569) ──────────────────────────────────────────────
+        Panel bottomBar = new Panel { Location = new Point(0, 508), Size = new Size(680, 62), BackColor = Surface };
+        var saveBtn   = RecorderForm.MkBtn("Save",   Green, 110, 40); saveBtn.Location   = new Point(450, 11); saveBtn.DialogResult   = DialogResult.OK;
+        var cancelBtn = RecorderForm.MkBtn("Cancel", Red,   110, 40); cancelBtn.Location = new Point(568, 11); cancelBtn.DialogResult = DialogResult.Cancel;
         bottomBar.Controls.AddRange(new Control[] { saveBtn, cancelBtn });
 
         AcceptButton = saveBtn;
         CancelButton = cancelBtn;
 
-        Controls.AddRange(new Control[] { titleBar, folderPanel, div1, apiPanel, divApi, buildPanel, divBuild, filesPanel, div2, bottomBar });
+        Controls.AddRange(new Control[] { titleBar, folderPanel, div1, apiPanel, divApi, filesPanel, div2, bottomBar });
     }
 
     private void TitleBar_MouseDown(object? sender, MouseEventArgs e)
@@ -252,5 +227,30 @@ public class ContextSettingsDialog : Form
     {
         if (_filesList.SelectedIndex >= 0)
             _filesList.Items.RemoveAt(_filesList.SelectedIndex);
+    }
+
+    private void FilesList_DoubleClick(object? sender, EventArgs e)
+    {
+        if (_filesList.SelectedItem is string filePath && File.Exists(filePath))
+        {
+            try
+            {
+                string folderPath = Path.GetDirectoryName(filePath) ?? filePath;
+                if (Directory.Exists(folderPath))
+                {
+                    System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                    {
+                        FileName = folderPath,
+                        UseShellExecute = true
+                    });
+                    Logger.Instance.Log($"Opened folder for context file: {folderPath}");
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Instance.Log($"Context settings: failed to open folder: {ex.Message}");
+                MessageBox.Show($"Could not open folder. {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
     }
 }
