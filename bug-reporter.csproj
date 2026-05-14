@@ -17,6 +17,7 @@
   <PropertyGroup Condition="'$(Configuration)' == 'Release'">
     <DebugType>none</DebugType>
     <DebugSymbols>false</DebugSymbols>
+    <DebuggerSupport>false</DebuggerSupport>
   </PropertyGroup>
 
   <ItemGroup>
@@ -34,7 +35,9 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <None Include="tools\ffmpeg\bin\**\*.*" Condition="Exists('tools\\ffmpeg\\bin')">
+    <None Include="tools\ffmpeg\bin\**\*.*"
+          Exclude="tools\ffmpeg\bin\ffplay.exe;tools\ffmpeg\bin\ffplay*.dll"
+          Condition="Exists('tools\\ffmpeg\\bin')">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>Always</CopyToPublishDirectory>
       <Link>tools\ffmpeg\bin\%(RecursiveDir)%(Filename)%(Extension)</Link>
@@ -76,6 +79,27 @@
     </ItemGroup>
 
     <RemoveDir Directories="@(CultureDirectories)" Condition="Exists('%(CultureDirectories.Identity)')" />
+  </Target>
+
+  <Target Name="RemoveRedundantLibVlcPackageFolder" AfterTargets="Publish">
+    <ItemGroup>
+      <RedundantLibVlcDir Include="$(PublishDir)libvlc" />
+    </ItemGroup>
+
+    <RemoveDir Directories="@(RedundantLibVlcDir)"
+               Condition="Exists('$(PublishDir)plugins') and Exists('%(RedundantLibVlcDir.Identity)')" />
+  </Target>
+
+  <Target Name="RemoveRuntimeDiagnosticsArtifacts" AfterTargets="Publish">
+    <ItemGroup>
+      <DiagnosticsArtifacts Include="$(PublishDir)Microsoft.DiaSymReader.Native.amd64.dll" />
+      <DiagnosticsArtifacts Include="$(PublishDir)mscordaccore.dll" />
+      <DiagnosticsArtifacts Include="$(PublishDir)mscordbi.dll" />
+      <DiagnosticsArtifacts Include="$(PublishDir)mscordaccore_*.dll" />
+      <DiagnosticsArtifacts Include="$(PublishDir)createdump.exe" />
+    </ItemGroup>
+
+    <Delete Files="@(DiagnosticsArtifacts)" />
   </Target>
 
 </Project>
