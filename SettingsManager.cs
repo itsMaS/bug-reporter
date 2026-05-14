@@ -10,18 +10,47 @@ public class SettingsManager
 
     public SettingsManager()
     {
+        _configPath = ResolveConfigPath();
+        _settings = LoadSettings();
+    }
+
+    private static string ResolveConfigPath()
+    {
+        string appDir = AppContext.BaseDirectory;
+        string exeConfigPath = Path.Combine(appDir, "settings.json");
+        string legacyConfigPath = GetLegacyConfigPath();
+
+        try
+        {
+            Directory.CreateDirectory(appDir);
+
+            if (!File.Exists(exeConfigPath) && File.Exists(legacyConfigPath))
+            {
+                // Keep existing user config when moving from AppData to portable settings.
+                File.Copy(legacyConfigPath, exeConfigPath, overwrite: false);
+            }
+
+            using (FileStream stream = new FileStream(exeConfigPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.ReadWrite))
+            {
+            }
+
+            return exeConfigPath;
+        }
+        catch
+        {
+            string legacyFolder = Path.GetDirectoryName(legacyConfigPath)!;
+            Directory.CreateDirectory(legacyFolder);
+            return legacyConfigPath;
+        }
+    }
+
+    private static string GetLegacyConfigPath()
+    {
         string appDataFolder = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
             "ScreenRecorder"
         );
-
-        if (!Directory.Exists(appDataFolder))
-        {
-            Directory.CreateDirectory(appDataFolder);
-        }
-
-        _configPath = Path.Combine(appDataFolder, "settings.json");
-        _settings = LoadSettings();
+        return Path.Combine(appDataFolder, "settings.json");
     }
 
     private Dictionary<string, object> LoadSettings()
