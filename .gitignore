@@ -28,6 +28,9 @@ packages/
 
 # OS files
 Thumbs.db
+
+# GitHub auth token (never commit this)
+github-token.txt
 .DS_Store
 .AppleDouble
 .LSOverride

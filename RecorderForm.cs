@@ -93,6 +93,8 @@ public partial class RecorderForm : Form
     private Button? _changeKeyButton;
     private Button? _changeSaveClipKeyButton;
 
+    private bool _formShownOnce = false;
+
     private const long MaxApiVideoBytes = 4 * 1024 * 1024;
 
     public RecorderForm()
@@ -557,7 +559,7 @@ public partial class RecorderForm : Form
         {
             string videoPath = await videoTask.ConfigureAwait(false);
             string finalizedInputPath = ApplyTrimIfRequested(videoPath, hasTrimSelection, trimStartSeconds, trimEndSeconds);
-            string safeTitle = string.IsNullOrWhiteSpace(title) ? "Untitled Report" : title.Trim();
+            string safeTitle = title?.Trim() ?? string.Empty;
             string safeDescription = string.IsNullOrWhiteSpace(description) ? "No description provided." : description.Trim();
             string normalizedSeverity = string.IsNullOrWhiteSpace(severity) ? "medium" : severity.Trim().ToLowerInvariant();
             string finalPath = MoveReportToOutputFolder(finalizedInputPath, safeTitle);
@@ -664,9 +666,10 @@ public partial class RecorderForm : Form
 
     private string MoveReportToOutputFolder(string videoPath, string title)
     {
-        string safeTitle  = SanitizeFileNameSegment(string.IsNullOrWhiteSpace(title) ? "Untitled Report" : title);
+        string safeTitle  = SanitizeFileNameSegment(title ?? string.Empty);
         string timestamp  = ExtractRecordingTimestamp(videoPath);
         string extension  = Path.GetExtension(videoPath);
+        string baseName   = string.IsNullOrWhiteSpace(safeTitle) ? $"[{timestamp}]" : $"{safeTitle} [{timestamp}]";
 
         // Use configured output folder (or fall back to where the video already lives)
         string outputFolder = _settings?.GetOutputFolder() ?? "";
@@ -674,7 +677,7 @@ public partial class RecorderForm : Form
             outputFolder = Path.GetDirectoryName(videoPath) ?? Environment.CurrentDirectory;
         if (!Directory.Exists(outputFolder)) Directory.CreateDirectory(outputFolder);
 
-        string renamedPath = GetUniqueFilePath(outputFolder, $"{safeTitle} [{timestamp}]", extension);
+        string renamedPath = GetUniqueFilePath(outputFolder, baseName, extension);
         if (!string.Equals(videoPath, renamedPath, StringComparison.OrdinalIgnoreCase))
         {
             File.Move(videoPath, renamedPath, overwrite: false);
@@ -695,7 +698,7 @@ public partial class RecorderForm : Form
     {
         char[] invalidChars = Path.GetInvalidFileNameChars();
         var sanitized = new string(value.Select(ch => invalidChars.Contains(ch) ? '_' : ch).ToArray()).Trim();
-        return string.IsNullOrWhiteSpace(sanitized) ? "Untitled Report" : sanitized;
+        return sanitized;
     }
 
     private static string GetUniqueFilePath(string directory, string baseName, string extension)
@@ -1086,7 +1089,7 @@ public partial class RecorderForm : Form
     {
         string configured = _settings?.GetOutputFolder() ?? "";
         string path = string.IsNullOrWhiteSpace(configured)
-            ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyVideos), "ScreenRecordings")
+            ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyVideos), "Bug Reporter")
             : configured;
         if (Directory.Exists(path))
             System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo { FileName = path, UseShellExecute = true });
@@ -1097,9 +1100,11 @@ public partial class RecorderForm : Form
     private void MinimizeToTray() { Hide(); WindowState = FormWindowState.Minimized; _notifyIcon!.Visible = true; }
     private void ShowWindow()     { Show(); WindowState = FormWindowState.Normal;    BringToFront(); _notifyIcon!.Visible = false; }
 
+    protected override void OnShown(EventArgs e) { base.OnShown(e); _formShownOnce = true; }
+
     private void RecorderForm_Resize(object? sender, EventArgs e)
     {
-        if (WindowState == FormWindowState.Minimized) { Hide(); _notifyIcon!.Visible = true; }
+        if (_formShownOnce && WindowState == FormWindowState.Minimized) { Hide(); _notifyIcon!.Visible = true; }
     }
 
     private void RecorderForm_FormClosing(object? sender, FormClosingEventArgs e)

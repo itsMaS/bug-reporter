@@ -97,7 +97,7 @@ public class ScreenRecorder : IDisposable
 
         _videosFolder = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.MyVideos),
-            "ScreenRecordings"
+            "Bug Reporter"
         );
 
         // Create videos folder if it doesn't exist
@@ -116,9 +116,16 @@ public class ScreenRecorder : IDisposable
     {
         if (string.IsNullOrWhiteSpace(folder))
             return;
-        _videosFolder = folder;
-        if (!Directory.Exists(_videosFolder))
-            Directory.CreateDirectory(_videosFolder);
+        try
+        {
+            if (!Directory.Exists(folder))
+                Directory.CreateDirectory(folder);
+            _videosFolder = folder;
+        }
+        catch (Exception ex)
+        {
+            Logger.Instance.Log($"Output folder '{folder}' is inaccessible ({ex.GetType().Name}: {ex.Message}). Keeping default folder.");
+        }
     }
 
     public string GetOutputFolder() => _videosFolder;

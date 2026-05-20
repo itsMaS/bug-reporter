@@ -10,6 +10,12 @@ internal static class Program
 	{
 		Application.EnableVisualStyles();
 		Application.SetDefaultFont(new Font("Segoe UI", 9f));
+
+		Application.ThreadException += (_, e) =>
+			Logger.Instance.Log($"Unhandled UI exception: {e.Exception.GetType().Name}: {e.Exception.Message}\n{e.Exception.StackTrace}");
+		AppDomain.CurrentDomain.UnhandledException += (_, e) =>
+			Logger.Instance.Log($"Fatal exception: {e.ExceptionObject}");
+
 		_ = Task.Run(() => PrewarmMediaRuntime());
 		Application.Run(new RecorderForm());
 	}

@@ -67,7 +67,7 @@ public class ContextSettingsDialog : Form
         var folderHint = RecorderForm.MkLabel("Where submitted report videos will be saved", 8f, false, Tx2); folderHint.Location = new Point(20, 28);
 
         string defaultFolder = string.IsNullOrWhiteSpace(currentOutputFolder)
-            ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyVideos), "ScreenRecordings")
+            ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyVideos), "Bug Reporter")
             : currentOutputFolder;
 
         _outputFolderBox = new TextBox
