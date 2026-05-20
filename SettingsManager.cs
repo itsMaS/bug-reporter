@@ -143,7 +143,8 @@ public class SettingsManager
             { "FeedbackApiBuildVersion", "" },
             { "FeedbackApiKeyEncrypted", "" },
             { "MicEnabled", false },
-            { "MicDeviceId", "" }
+            { "MicDeviceId", "" },
+            { "RecordingMode", "Toggle" }
         };
     }
 
@@ -343,6 +344,18 @@ public class SettingsManager
     public void SetMicDeviceId(string deviceId)
     {
         _settings["MicDeviceId"] = deviceId ?? "";
+        SaveSettings();
+    }
+
+    public string GetRecordingMode()
+    {
+        string value = GetStringSetting("RecordingMode", "Toggle");
+        return value == "Hold" ? "Hold" : "Toggle";
+    }
+
+    public void SetRecordingMode(string mode)
+    {
+        _settings["RecordingMode"] = mode == "Hold" ? "Hold" : "Toggle";
         SaveSettings();
     }
 

@@ -96,6 +96,7 @@ public partial class RecorderForm : Form
     private bool _suppressProfileChange;
     private Button? _micToggleButton;
     private ComboBox? _micDeviceComboBox;
+    private Button? _recordModeButton;
 
     private bool _formShownOnce = false;
 
@@ -203,6 +204,9 @@ public partial class RecorderForm : Form
         _retrospectiveDurationInput = new NumericUpDown { Minimum = 5, Maximum = 120, Value = 15, Size = new Size(66, 26), Location = new Point(490, 24), Font = new Font("Segoe UI", 9), BackColor = Surface2Color, ForeColor = TextColor, BorderStyle = BorderStyle.None };
         _retrospectiveDurationInput.ValueChanged += RetrospectiveDurationInput_ValueChanged;
 
+        var recordModeLbl = MkLabel("RECORD MODE", 7.5f, true); recordModeLbl.Location = new Point(572, 8);
+        _recordModeButton = MkBtn("TOGGLE", Surface2Color, 80, 26); _recordModeButton.Location = new Point(572, 24); _recordModeButton.ForeColor = OrangeColor; _recordModeButton.Click += RecordModeButton_Click;
+
         // Row 2 – output resolution and encoding quality, properly spaced below row 1
         var resolutionLbl = MkLabel("OUTPUT RESOLUTION", 7.5f, true); resolutionLbl.Location = new Point(20, 57);
         _outputResolutionComboBox = new ComboBox
@@ -259,6 +263,7 @@ public partial class RecorderForm : Form
         {
             monLbl, _monitorComboBox, _recordingKeyLabel, _changeKeyButton, _saveClipKeyLabel, _changeSaveClipKeyButton,
             _recordingFpsLabel, _recordingFpsInput, _retrospectiveDurationLabel, _retrospectiveDurationInput,
+            recordModeLbl, _recordModeButton,
             resolutionLbl, _outputResolutionComboBox, qualityLbl, _encodingQualityComboBox,
             profileLbl, _profileComboBox, newProfileBtn, deleteProfileBtn,
             micLbl, _micToggleButton, _micDeviceComboBox
@@ -417,6 +422,11 @@ public partial class RecorderForm : Form
         _recorder.SetMicEnabled(micEnabled);
         LoadMicDevices(micDeviceId);
         UpdateMicToggle(micEnabled);
+
+        // Recording mode
+        string recordingMode = _settings.GetRecordingMode();
+        _keyboardListener!.HoldMode = recordingMode == "Hold";
+        UpdateRecordModeButton(recordingMode);
     }
 
     private void LoadMicDevices(string selectedDeviceId = "")
@@ -439,7 +449,23 @@ public partial class RecorderForm : Form
         _micDeviceComboBox!.Visible = enabled;
     }
 
+    private void UpdateRecordModeButton(string mode)
+    {
+        _recordModeButton!.Text      = mode == "Hold" ? "HOLD" : "TOGGLE";
+        _recordModeButton.ForeColor  = mode == "Hold" ? BlueColor : OrangeColor;
+    }
+
     // ── Mic handlers ──────────────────────────────────────────────────────────
+    private void RecordModeButton_Click(object? sender, EventArgs e)
+    {
+        string current = _settings!.GetRecordingMode();
+        string newMode = current == "Hold" ? "Toggle" : "Hold";
+        _settings.SetRecordingMode(newMode);
+        _keyboardListener!.HoldMode = newMode == "Hold";
+        UpdateRecordModeButton(newMode);
+        Logger.Instance.Log($"Recording mode set to: {newMode}");
+    }
+
     private void MicToggleButton_Click(object? sender, EventArgs e)
     {
         bool newState = !_settings!.GetMicEnabled();
@@ -687,6 +713,8 @@ public partial class RecorderForm : Form
             onReleased:          () => { if (_recorder?.StopRecording()  == true) UpdateUI(false); },
             onSaveClipRequested: () => _recorder?.SaveRecentClip()
         );
+        if (_settings != null && _keyboardListener != null)
+            _keyboardListener.HoldMode = _settings.GetRecordingMode() == "Hold";
     }
 
     // ── Recorder events ───────────────────────────────────────────────────────

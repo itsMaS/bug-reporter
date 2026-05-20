@@ -12,6 +12,13 @@ public class KeyboardListener : IDisposable
     private bool _isKeyPressed = false;
     private bool _isSaveKeyPressed = false;
     private bool _isRecordingToggled = false;
+    private bool _holdMode = false;
+
+    public bool HoldMode
+    {
+        get => _holdMode;
+        set => _holdMode = value;
+    }
     private Thread? _listenerThread;
     private bool _isListening = false;
     private Action? _onKeyPressed;
@@ -67,26 +74,38 @@ public class KeyboardListener : IDisposable
 
                 if (isPressed && !_isKeyPressed)
                 {
-                    // Key was just pressed; toggle recording state.
                     _isKeyPressed = true;
 
-                    if (_isRecordingToggled)
+                    if (_holdMode)
                     {
-                        _isRecordingToggled = false;
-                        Logger.Instance.Log("Recording key pressed - stopping recording");
-                        SafeInvoke(_onKeyReleased, "onReleased");
+                        Logger.Instance.Log("Recording key held - starting recording");
+                        SafeInvoke(_onKeyPressed, "onPressed");
                     }
                     else
                     {
-                        _isRecordingToggled = true;
-                        Logger.Instance.Log("Recording key pressed - starting recording");
-                        SafeInvoke(_onKeyPressed, "onPressed");
+                        if (_isRecordingToggled)
+                        {
+                            _isRecordingToggled = false;
+                            Logger.Instance.Log("Recording key pressed - stopping recording");
+                            SafeInvoke(_onKeyReleased, "onReleased");
+                        }
+                        else
+                        {
+                            _isRecordingToggled = true;
+                            Logger.Instance.Log("Recording key pressed - starting recording");
+                            SafeInvoke(_onKeyPressed, "onPressed");
+                        }
                     }
                 }
                 else if (!isPressed && _isKeyPressed)
                 {
-                    // Key was just released.
                     _isKeyPressed = false;
+
+                    if (_holdMode)
+                    {
+                        Logger.Instance.Log("Recording key released - stopping recording");
+                        SafeInvoke(_onKeyReleased, "onReleased");
+                    }
                 }
 
                 short saveKeyState = GetAsyncKeyState(_saveClipKeyCode);
