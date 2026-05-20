@@ -100,6 +100,17 @@ public class FeedbackReportDialog : Form
 
     protected override bool ShowWithoutActivation => true;
 
+    protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+    {
+        if (keyData == Keys.Escape && !_globalCaptureActive)
+        {
+            DialogResult = DialogResult.Cancel;
+            Close();
+            return true;
+        }
+        return base.ProcessCmdKey(ref msg, keyData);
+    }
+
     protected override CreateParams CreateParams
     {
         get

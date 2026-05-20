@@ -92,6 +92,8 @@ public partial class RecorderForm : Form
     private Button? _openFolderButton;
     private Button? _changeKeyButton;
     private Button? _changeSaveClipKeyButton;
+    private ComboBox? _profileComboBox;
+    private bool _suppressProfileChange;
 
     private bool _formShownOnce = false;
 
@@ -169,8 +171,8 @@ public partial class RecorderForm : Form
 
         statusPanel.Controls.AddRange(new Control[] { _statusDot, _statusLabel, _instructionsLabel });
 
-        // 3. Config strip – Dock.Top, two proper rows with breathing room
-        Panel cfgPanel = new Panel { Height = 104, Dock = DockStyle.Top, BackColor = SurfaceColor };
+        // 3. Config strip – Dock.Top, three rows with breathing room
+        Panel cfgPanel = new Panel { Height = 152, Dock = DockStyle.Top, BackColor = SurfaceColor };
 
         var monLbl = MkLabel("MONITOR", 7.5f, true); monLbl.Location = new Point(20, 8);
         _selectedMonitorLabel = monLbl;
@@ -224,11 +226,25 @@ public partial class RecorderForm : Form
         });
         _encodingQualityComboBox.SelectedIndexChanged += EncodingQualityComboBox_SelectedIndexChanged;
 
+        // Row 3 – profile selector
+        var profileLbl = MkLabel("PROFILE", 7.5f, true); profileLbl.Location = new Point(20, 104);
+        _profileComboBox = new ComboBox
+        {
+            Size = new Size(180, 26), Location = new Point(20, 119),
+            DropDownStyle = ComboBoxStyle.DropDownList, Font = new Font("Segoe UI", 9),
+            BackColor = Surface2Color, ForeColor = TextColor, FlatStyle = FlatStyle.Flat
+        };
+        _profileComboBox.SelectedIndexChanged += ProfileComboBox_SelectedIndexChanged;
+
+        var newProfileBtn = MkBtn("+ New", Surface2Color, 64, 26); newProfileBtn.Location = new Point(208, 119); newProfileBtn.ForeColor = GreenColor; newProfileBtn.Click += NewProfileButton_Click;
+        var deleteProfileBtn = MkBtn("Delete", Surface2Color, 64, 26); deleteProfileBtn.Location = new Point(280, 119); deleteProfileBtn.ForeColor = RedColor; deleteProfileBtn.Click += DeleteProfileButton_Click;
+
         cfgPanel.Controls.AddRange(new Control[]
         {
             monLbl, _monitorComboBox, _recordingKeyLabel, _changeKeyButton, _saveClipKeyLabel, _changeSaveClipKeyButton,
             _recordingFpsLabel, _recordingFpsInput, _retrospectiveDurationLabel, _retrospectiveDurationInput,
-            resolutionLbl, _outputResolutionComboBox, qualityLbl, _encodingQualityComboBox
+            resolutionLbl, _outputResolutionComboBox, qualityLbl, _encodingQualityComboBox,
+            profileLbl, _profileComboBox, newProfileBtn, deleteProfileBtn
         });
 
         // 4. Actions – Dock.Top
@@ -343,18 +359,26 @@ public partial class RecorderForm : Form
         _recorder.RecordingProcessingStarted += Recorder_RecordingProcessingStarted;
         _keyboardListener = new KeyboardListener();
 
-        int savedKeyCode   = _settings.GetRecordingKeyCode();
-        string savedKeyName = _settings.GetRecordingKeyName();
-        int recordingFps   = _settings.GetRecordingFps();
-        string outputResolution = _settings.GetOutputResolutionPreset();
-        string encodingQuality = _settings.GetEncodingQualityPreset();
-        int savedClipKeyCode = _settings.GetSaveClipKeyCode();
-        string savedClipKeyName = _settings.GetSaveClipKeyName();
-        int retrospectiveDurationSeconds = _settings.GetRetrospectiveDurationSeconds();
+        RefreshProfileComboBox();
+        LoadSettingsToUi();
+        RestartKeyboardListener();
+        UpdateUI(false);
+    }
 
-        _keyboardListener.RecordingKeyCode = savedKeyCode;
-        _keyboardListener.SaveClipKeyCode  = savedClipKeyCode;
-        _recorder.SetRecordingFps(recordingFps);
+    private void LoadSettingsToUi()
+    {
+        int recordingFps                  = _settings!.GetRecordingFps();
+        string outputResolution           = _settings.GetOutputResolutionPreset();
+        string encodingQuality            = _settings.GetEncodingQualityPreset();
+        int retrospectiveDurationSeconds  = _settings.GetRetrospectiveDurationSeconds();
+        int savedKeyCode                  = _settings.GetRecordingKeyCode();
+        string savedKeyName               = _settings.GetRecordingKeyName();
+        int savedClipKeyCode              = _settings.GetSaveClipKeyCode();
+        string savedClipKeyName           = _settings.GetSaveClipKeyName();
+
+        _keyboardListener!.RecordingKeyCode = savedKeyCode;
+        _keyboardListener.SaveClipKeyCode   = savedClipKeyCode;
+        _recorder!.SetRecordingFps(recordingFps);
         _recorder.SetOutputResolutionPreset(outputResolution);
         _recorder.SetEncodingQualityPreset(encodingQuality);
         _recorder.SetRetrospectiveDurationSeconds(retrospectiveDurationSeconds);
@@ -366,11 +390,95 @@ public partial class RecorderForm : Form
         _recordingFpsInput!.Value          = recordingFps;
         _retrospectiveDurationInput!.Value = retrospectiveDurationSeconds;
         _outputResolutionComboBox!.SelectedItem = outputResolution;
-        _encodingQualityComboBox!.SelectedItem = encodingQuality;
+        _encodingQualityComboBox!.SelectedItem  = encodingQuality;
         UpdateRetrospectiveUi(savedKeyName, savedClipKeyName, retrospectiveDurationSeconds);
+    }
 
-        RestartKeyboardListener();
-        UpdateUI(false);
+    private void RefreshProfileComboBox()
+    {
+        _suppressProfileChange = true;
+        try
+        {
+            _profileComboBox!.Items.Clear();
+            foreach (string name in _settings!.GetProfileNames())
+                _profileComboBox.Items.Add(name);
+            _profileComboBox.SelectedItem = _settings.ActiveProfileName;
+        }
+        finally
+        {
+            _suppressProfileChange = false;
+        }
+    }
+
+    // ── Profile handlers ──────────────────────────────────────────────────────
+    private void ProfileComboBox_SelectedIndexChanged(object? sender, EventArgs e)
+    {
+        if (_suppressProfileChange) return;
+        if (_profileComboBox?.SelectedItem is string profileName && _settings != null)
+        {
+            if (!string.Equals(profileName, _settings.ActiveProfileName, StringComparison.OrdinalIgnoreCase))
+            {
+                _settings.SwitchProfile(profileName);
+                LoadSettingsToUi();
+                Logger.Instance.Log($"Switched to profile: {profileName}");
+            }
+        }
+    }
+
+    private void NewProfileButton_Click(object? sender, EventArgs e)
+    {
+        string? name = PromptForInput(this, "New Profile", "Enter a name for the new profile:");
+        if (string.IsNullOrWhiteSpace(name)) return;
+
+        // Sanitize: strip invalid filename chars
+        char[] invalid = Path.GetInvalidFileNameChars();
+        name = new string(name.Where(c => !invalid.Contains(c)).ToArray()).Trim();
+        if (string.IsNullOrWhiteSpace(name)) return;
+
+        _settings!.CreateProfile(name);
+        _settings.SwitchProfile(name);
+        RefreshProfileComboBox();
+        LoadSettingsToUi();
+        Logger.Instance.Log($"Created and switched to profile: {name}");
+    }
+
+    private void DeleteProfileButton_Click(object? sender, EventArgs e)
+    {
+        string current = _settings?.ActiveProfileName ?? "Default";
+        if (string.Equals(current, "Default", StringComparison.OrdinalIgnoreCase))
+        {
+            MessageBox.Show("The Default profile cannot be deleted.", "Delete Profile", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        var confirm = MessageBox.Show($"Delete profile \"{current}\"?", "Delete Profile", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+        if (confirm != DialogResult.Yes) return;
+
+        _settings!.DeleteProfile(current);
+        RefreshProfileComboBox();
+        LoadSettingsToUi();
+        Logger.Instance.Log($"Deleted profile: {current}");
+    }
+
+    private static string? PromptForInput(IWin32Window owner, string title, string prompt)
+    {
+        using var form = new Form
+        {
+            Text = title,
+            Size = new Size(360, 150),
+            StartPosition = FormStartPosition.CenterParent,
+            FormBorderStyle = FormBorderStyle.FixedDialog,
+            MinimizeBox = false, MaximizeBox = false,
+            BackColor = BgColor
+        };
+        var lbl = MkLabel(prompt);                lbl.Location = new Point(12, 14);
+        var tb  = new TextBox                     { Location = new Point(12, 36), Width = 322, BackColor = Surface2Color, ForeColor = TextColor, BorderStyle = BorderStyle.FixedSingle };
+        var ok  = MkBtn("OK",     BlueColor,  80, 30); ok.Location     = new Point(158, 72); ok.DialogResult     = DialogResult.OK;
+        var cancel = MkBtn("Cancel", SurfaceColor, 80, 30); cancel.Location = new Point(246, 72); cancel.DialogResult = DialogResult.Cancel;
+        form.Controls.AddRange(new Control[] { lbl, tb, ok, cancel });
+        form.AcceptButton = ok;
+        form.CancelButton = cancel;
+        return form.ShowDialog(owner) == DialogResult.OK ? tb.Text.Trim() : null;
     }
 
     // ── Monitors ──────────────────────────────────────────────────────────────

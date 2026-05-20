@@ -5,61 +5,95 @@ namespace bug_reporter;
 
 public class SettingsManager
 {
-    private readonly string _configPath;
+    private static readonly string AppDataFolder = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+        "ScreenRecorder");
+
+    private static readonly string ProfilesFolder = Path.Combine(AppDataFolder, "profiles");
+    private static readonly string ActiveProfileFile = Path.Combine(AppDataFolder, "active-profile.txt");
+
+    private string _activeProfileName;
     private Dictionary<string, object> _settings;
+
+    public string ActiveProfileName => _activeProfileName;
 
     public SettingsManager()
     {
-        _configPath = ResolveConfigPath();
-        _settings = LoadSettings();
+        Directory.CreateDirectory(ProfilesFolder);
+        MigrateFromLegacyIfNeeded();
+        _activeProfileName = LoadActiveProfileName();
+        EnsureProfileExists(_activeProfileName);
+        _settings = LoadProfileSettings(_activeProfileName);
     }
 
-    private static string ResolveConfigPath()
-    {
-        string appDir = AppContext.BaseDirectory;
-        string exeConfigPath = Path.Combine(appDir, "settings.json");
-        string legacyConfigPath = GetLegacyConfigPath();
+    // ── Profile management ────────────────────────────────────────────────────
 
+    public IReadOnlyList<string> GetProfileNames()
+    {
+        return Directory.GetFiles(ProfilesFolder, "*.json")
+            .Select(f => Path.GetFileNameWithoutExtension(f)!)
+            .OrderBy(n => n, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    public void CreateProfile(string name)
+    {
+        string path = GetProfilePath(name);
+        if (!File.Exists(path))
+            SaveToPath(GetDefaultSettings(), path);
+    }
+
+    public void DeleteProfile(string name)
+    {
+        if (string.Equals(name, "Default", StringComparison.OrdinalIgnoreCase)) return;
+        string path = GetProfilePath(name);
+        if (File.Exists(path)) File.Delete(path);
+        if (string.Equals(_activeProfileName, name, StringComparison.OrdinalIgnoreCase))
+            SwitchProfile("Default");
+    }
+
+    public void SwitchProfile(string name)
+    {
+        _activeProfileName = name;
+        EnsureProfileExists(name);
+        _settings = LoadProfileSettings(name);
+        try { File.WriteAllText(ActiveProfileFile, name); } catch { }
+    }
+
+    // ── Internal helpers ──────────────────────────────────────────────────────
+
+    private static string GetProfilePath(string name) =>
+        Path.Combine(ProfilesFolder, $"{name}.json");
+
+    private void EnsureProfileExists(string name)
+    {
+        string path = GetProfilePath(name);
+        if (!File.Exists(path))
+            SaveToPath(GetDefaultSettings(), path);
+    }
+
+    private static string LoadActiveProfileName()
+    {
         try
         {
-            Directory.CreateDirectory(appDir);
-
-            if (!File.Exists(exeConfigPath) && File.Exists(legacyConfigPath))
+            if (File.Exists(ActiveProfileFile))
             {
-                // Keep existing user config when moving from AppData to portable settings.
-                File.Copy(legacyConfigPath, exeConfigPath, overwrite: false);
+                string name = File.ReadAllText(ActiveProfileFile).Trim();
+                if (!string.IsNullOrWhiteSpace(name)) return name;
             }
-
-            using (FileStream stream = new FileStream(exeConfigPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.ReadWrite))
-            {
-            }
-
-            return exeConfigPath;
         }
-        catch
-        {
-            string legacyFolder = Path.GetDirectoryName(legacyConfigPath)!;
-            Directory.CreateDirectory(legacyFolder);
-            return legacyConfigPath;
-        }
+        catch { }
+        return "Default";
     }
 
-    private static string GetLegacyConfigPath()
+    private static Dictionary<string, object> LoadProfileSettings(string profileName)
     {
-        string appDataFolder = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-            "ScreenRecorder"
-        );
-        return Path.Combine(appDataFolder, "settings.json");
-    }
-
-    private Dictionary<string, object> LoadSettings()
-    {
+        string path = GetProfilePath(profileName);
         try
         {
-            if (File.Exists(_configPath))
+            if (File.Exists(path))
             {
-                string json = File.ReadAllText(_configPath);
+                string json = File.ReadAllText(path);
                 var loaded = JsonSerializer.Deserialize<Dictionary<string, object>>(json);
                 return loaded ?? GetDefaultSettings();
             }
@@ -68,11 +102,29 @@ public class SettingsManager
         {
             Console.WriteLine($"Error loading settings: {ex.Message}");
         }
-
         return GetDefaultSettings();
     }
 
-    private Dictionary<string, object> GetDefaultSettings()
+    private static void MigrateFromLegacyIfNeeded()
+    {
+        string defaultProfile = GetProfilePath("Default");
+        if (File.Exists(defaultProfile)) return;
+
+        // Try portable (next to exe) first, then old AppData flat file
+        string portablePath = Path.Combine(AppContext.BaseDirectory, "settings.json");
+        string legacyPath   = Path.Combine(AppDataFolder, "settings.json");
+
+        string? source = File.Exists(portablePath) ? portablePath
+                       : File.Exists(legacyPath)   ? legacyPath
+                       : null;
+
+        if (source != null)
+        {
+            try { File.Copy(source, defaultProfile, overwrite: false); } catch { }
+        }
+    }
+
+    private static Dictionary<string, object> GetDefaultSettings()
     {
         return new Dictionary<string, object>
         {
@@ -95,10 +147,16 @@ public class SettingsManager
 
     public void SaveSettings()
     {
+        SaveToPath(_settings, GetProfilePath(_activeProfileName));
+    }
+
+    private static void SaveToPath(Dictionary<string, object> settings, string path)
+    {
         try
         {
-            string json = JsonSerializer.Serialize(_settings, new JsonSerializerOptions { WriteIndented = true });
-            File.WriteAllText(_configPath, json);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            string json = JsonSerializer.Serialize(settings, new JsonSerializerOptions { WriteIndented = true });
+            File.WriteAllText(path, json);
         }
         catch (Exception ex)
         {
