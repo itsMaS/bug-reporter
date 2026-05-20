@@ -330,6 +330,11 @@ public class FeedbackReportDialog : Form
         _positionTimer.Stop();
         StopProcessingAnimation();
         StopGlobalKeyboardCapture();
+        if (_keyboardHookHandle != IntPtr.Zero)
+        {
+            UnhookWindowsHookEx(_keyboardHookHandle);
+            _keyboardHookHandle = IntPtr.Zero;
+        }
         _mediaPlayer.Media?.Dispose();
         _mediaPlayer.Dispose();
         _libVlc.Dispose();
@@ -631,69 +636,79 @@ public class FeedbackReportDialog : Form
     private void StopGlobalKeyboardCapture()
     {
         _globalCaptureActive = false;
-        if (_keyboardHookHandle != IntPtr.Zero)
-        {
-            UnhookWindowsHookEx(_keyboardHookHandle);
-            _keyboardHookHandle = IntPtr.Zero;
-        }
-
+        // Hook stays installed until FormClosing so ESC can still cancel the dialog
+        // even when the window is unfocused.
         _captureStateLabel!.Text = "Typing Capture: OFF";
     }
 
     private IntPtr KeyboardHookCallback(int nCode, IntPtr wParam, IntPtr lParam)
     {
-        if (nCode >= 0 && _globalCaptureActive)
+        if (nCode >= 0)
         {
             int msg = wParam.ToInt32();
             bool isKeyDown = msg == WmKeyDown || msg == WmSysKeyDown;
-            bool isKeyUp = msg == WmKeyUp || msg == WmSysKeyUp;
+            bool isKeyUp   = msg == WmKeyUp   || msg == WmSysKeyUp;
 
             if (isKeyDown)
             {
                 var hook = Marshal.PtrToStructure<KbdLlHookStruct>(lParam);
                 Keys key = (Keys)hook.vkCode;
 
-                if (key == Keys.Enter)
-                {
-                    BeginInvoke(new Action(SubmitFromGlobalCapture));
-                    return (IntPtr)1;
-                }
-
-                if (key == Keys.Back)
-                {
-                    BeginInvoke(new Action(DeletePreviousCharacter));
-                    return (IntPtr)1;
-                }
-
-                if (key == Keys.Tab)
-                {
-                    BeginInvoke(new Action(() => InsertAtDescriptionCaret("    ")));
-                    return (IntPtr)1;
-                }
-
+                // ESC always cancels/exits — regardless of whether capture is active
                 if (key == Keys.Escape)
                 {
-                    BeginInvoke(new Action(StopGlobalKeyboardCapture));
+                    if (_globalCaptureActive)
+                        BeginInvoke(new Action(StopGlobalKeyboardCapture));
+                    else
+                        BeginInvoke(new Action(CancelFromGlobalHook));
                     return (IntPtr)1;
                 }
 
-                string text = ConvertKeyToText(hook.vkCode, hook.scanCode);
-                if (!string.IsNullOrEmpty(text))
+                if (_globalCaptureActive)
                 {
-                    BeginInvoke(new Action(() => InsertAtDescriptionCaret(text)));
+                    if (key == Keys.Enter)
+                    {
+                        BeginInvoke(new Action(SubmitFromGlobalCapture));
+                        return (IntPtr)1;
+                    }
+
+                    if (key == Keys.Back)
+                    {
+                        BeginInvoke(new Action(DeletePreviousCharacter));
+                        return (IntPtr)1;
+                    }
+
+                    if (key == Keys.Tab)
+                    {
+                        BeginInvoke(new Action(() => InsertAtDescriptionCaret("    ")));
+                        return (IntPtr)1;
+                    }
+
+                    string text = ConvertKeyToText(hook.vkCode, hook.scanCode);
+                    if (!string.IsNullOrEmpty(text))
+                    {
+                        BeginInvoke(new Action(() => InsertAtDescriptionCaret(text)));
+                        return (IntPtr)1;
+                    }
+
                     return (IntPtr)1;
                 }
-
-                return (IntPtr)1;
             }
 
-            if (isKeyUp)
+            if (isKeyUp && _globalCaptureActive)
             {
                 return (IntPtr)1;
             }
         }
 
         return CallNextHookEx(_keyboardHookHandle, nCode, wParam, lParam);
+    }
+
+    private void CancelFromGlobalHook()
+    {
+        if (IsDisposed) return;
+        DialogResult = DialogResult.Cancel;
+        Close();
     }
 
     private static string ConvertKeyToText(uint vkCode, uint scanCode)

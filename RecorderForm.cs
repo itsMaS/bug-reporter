@@ -162,10 +162,8 @@ public partial class RecorderForm : Form
         titleBar.MouseDown += TitleBar_MouseDown;
 
         var tbIcon = MkLabel("⏺", 13, false, RedColor);   tbIcon.Location = new Point(16, 10);
-        var tbName = MkLabel("Bug Reporter", 11, true, TextColor); tbName.Location = new Point(42, 11);
-        tbName.MouseDown += TitleBar_MouseDown;
 
-        titleBar.Controls.AddRange(new Control[] { tbIcon, tbName });
+        titleBar.Controls.AddRange(new Control[] { tbIcon });
 
         // 2. Status area – Dock.Top
         Panel statusPanel = new Panel { Height = 80, Dock = DockStyle.Top, BackColor = BgColor };
