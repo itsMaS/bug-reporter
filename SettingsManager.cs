@@ -141,7 +141,9 @@ public class SettingsManager
             { "FeedbackApiEndpoint", "" },
             { "FeedbackApiBuildId", "" },
             { "FeedbackApiBuildVersion", "" },
-            { "FeedbackApiKeyEncrypted", "" }
+            { "FeedbackApiKeyEncrypted", "" },
+            { "MicEnabled", false },
+            { "MicDeviceId", "" }
         };
     }
 
@@ -326,6 +328,35 @@ public class SettingsManager
     {
         _settings["FeedbackApiKeyEncrypted"] = EncryptSecret((apiKey ?? string.Empty).Trim());
         SaveSettings();
+    }
+
+    public bool GetMicEnabled() => GetBoolSetting("MicEnabled", false);
+
+    public void SetMicEnabled(bool enabled)
+    {
+        _settings["MicEnabled"] = enabled;
+        SaveSettings();
+    }
+
+    public string GetMicDeviceId() => GetStringSetting("MicDeviceId", "");
+
+    public void SetMicDeviceId(string deviceId)
+    {
+        _settings["MicDeviceId"] = deviceId ?? "";
+        SaveSettings();
+    }
+
+    private bool GetBoolSetting(string key, bool defaultValue)
+    {
+        if (!_settings.TryGetValue(key, out object? value) || value == null)
+            return defaultValue;
+        if (value is JsonElement element)
+        {
+            if (element.ValueKind == JsonValueKind.True) return true;
+            if (element.ValueKind == JsonValueKind.False) return false;
+        }
+        if (value is bool b) return b;
+        return defaultValue;
     }
 
     private int GetIntSetting(string key, int defaultValue)

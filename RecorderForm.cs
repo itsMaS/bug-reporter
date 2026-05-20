@@ -94,8 +94,12 @@ public partial class RecorderForm : Form
     private Button? _changeSaveClipKeyButton;
     private ComboBox? _profileComboBox;
     private bool _suppressProfileChange;
+    private Button? _micToggleButton;
+    private ComboBox? _micDeviceComboBox;
 
     private bool _formShownOnce = false;
+
+    private sealed record MicDeviceItem(string Id, string Name) { public override string ToString() => Name; }
 
     private const long MaxApiVideoBytes = 4 * 1024 * 1024;
 
@@ -172,7 +176,7 @@ public partial class RecorderForm : Form
         statusPanel.Controls.AddRange(new Control[] { _statusDot, _statusLabel, _instructionsLabel });
 
         // 3. Config strip – Dock.Top, three rows with breathing room
-        Panel cfgPanel = new Panel { Height = 152, Dock = DockStyle.Top, BackColor = SurfaceColor };
+        Panel cfgPanel = new Panel { Height = 200, Dock = DockStyle.Top, BackColor = SurfaceColor };
 
         var monLbl = MkLabel("MONITOR", 7.5f, true); monLbl.Location = new Point(20, 8);
         _selectedMonitorLabel = monLbl;
@@ -239,12 +243,25 @@ public partial class RecorderForm : Form
         var newProfileBtn = MkBtn("+ New", Surface2Color, 64, 26); newProfileBtn.Location = new Point(208, 119); newProfileBtn.ForeColor = GreenColor; newProfileBtn.Click += NewProfileButton_Click;
         var deleteProfileBtn = MkBtn("Delete", Surface2Color, 64, 26); deleteProfileBtn.Location = new Point(280, 119); deleteProfileBtn.ForeColor = RedColor; deleteProfileBtn.Click += DeleteProfileButton_Click;
 
+        // Row 4 – microphone
+        var micLbl = MkLabel("MICROPHONE", 7.5f, true); micLbl.Location = new Point(20, 152);
+        _micToggleButton = MkBtn("MIC: OFF", Surface2Color, 100, 26); _micToggleButton.Location = new Point(20, 167); _micToggleButton.Click += MicToggleButton_Click;
+        _micDeviceComboBox = new ComboBox
+        {
+            Size = new Size(230, 26), Location = new Point(128, 167),
+            DropDownStyle = ComboBoxStyle.DropDownList, Font = new Font("Segoe UI", 8.5f),
+            BackColor = Surface2Color, ForeColor = TextColor, FlatStyle = FlatStyle.Flat,
+            Visible = false
+        };
+        _micDeviceComboBox.SelectedIndexChanged += MicDeviceComboBox_SelectedIndexChanged;
+
         cfgPanel.Controls.AddRange(new Control[]
         {
             monLbl, _monitorComboBox, _recordingKeyLabel, _changeKeyButton, _saveClipKeyLabel, _changeSaveClipKeyButton,
             _recordingFpsLabel, _recordingFpsInput, _retrospectiveDurationLabel, _retrospectiveDurationInput,
             resolutionLbl, _outputResolutionComboBox, qualityLbl, _encodingQualityComboBox,
-            profileLbl, _profileComboBox, newProfileBtn, deleteProfileBtn
+            profileLbl, _profileComboBox, newProfileBtn, deleteProfileBtn,
+            micLbl, _micToggleButton, _micDeviceComboBox
         });
 
         // 4. Actions – Dock.Top
@@ -392,6 +409,55 @@ public partial class RecorderForm : Form
         _outputResolutionComboBox!.SelectedItem = outputResolution;
         _encodingQualityComboBox!.SelectedItem  = encodingQuality;
         UpdateRetrospectiveUi(savedKeyName, savedClipKeyName, retrospectiveDurationSeconds);
+
+        // Mic
+        string micDeviceId = _settings.GetMicDeviceId();
+        bool micEnabled    = _settings.GetMicEnabled();
+        _recorder.SetMicDeviceId(micDeviceId);
+        _recorder.SetMicEnabled(micEnabled);
+        LoadMicDevices(micDeviceId);
+        UpdateMicToggle(micEnabled);
+    }
+
+    private void LoadMicDevices(string selectedDeviceId = "")
+    {
+        _micDeviceComboBox!.SelectedIndexChanged -= MicDeviceComboBox_SelectedIndexChanged;
+        _micDeviceComboBox.Items.Clear();
+        _micDeviceComboBox.Items.Add(new MicDeviceItem("", "Default Microphone"));
+        foreach (var (id, name) in ScreenRecorder.GetMicrophoneDevices())
+            _micDeviceComboBox.Items.Add(new MicDeviceItem(id, name));
+        var toSelect = _micDeviceComboBox.Items.Cast<MicDeviceItem>()
+            .FirstOrDefault(m => m.Id == selectedDeviceId);
+        _micDeviceComboBox.SelectedItem = toSelect ?? _micDeviceComboBox.Items[0];
+        _micDeviceComboBox.SelectedIndexChanged += MicDeviceComboBox_SelectedIndexChanged;
+    }
+
+    private void UpdateMicToggle(bool enabled)
+    {
+        _micToggleButton!.Text      = enabled ? "MIC: ON" : "MIC: OFF";
+        _micToggleButton.ForeColor  = enabled ? GreenColor : Text2Color;
+        _micDeviceComboBox!.Visible = enabled;
+    }
+
+    // ── Mic handlers ──────────────────────────────────────────────────────────
+    private void MicToggleButton_Click(object? sender, EventArgs e)
+    {
+        bool newState = !_settings!.GetMicEnabled();
+        _settings.SetMicEnabled(newState);
+        _recorder!.SetMicEnabled(newState);
+        if (newState) LoadMicDevices(_settings.GetMicDeviceId());
+        UpdateMicToggle(newState);
+        Logger.Instance.Log($"Microphone recording {(newState ? "enabled" : "disabled")}.");
+    }
+
+    private void MicDeviceComboBox_SelectedIndexChanged(object? sender, EventArgs e)
+    {
+        if (_micDeviceComboBox?.SelectedItem is MicDeviceItem item)
+        {
+            _settings!.SetMicDeviceId(item.Id);
+            _recorder!.SetMicDeviceId(item.Id);
+            Logger.Instance.Log($"Microphone device set to: {item.Name}");
+        }
     }
 
     private void RefreshProfileComboBox()

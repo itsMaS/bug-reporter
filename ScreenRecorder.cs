@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Drawing;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
+using NAudio.CoreAudioApi;
 using NAudio.Wave;
 
 namespace bug_reporter;
@@ -34,6 +35,16 @@ public class ScreenRecorder : IDisposable
     private string _encodingQualityPreset = "Balanced";
     private int _retrospectiveCaptureFailureCount = 0;
     private long _lastRetrospectiveFailureLogTick = 0;
+
+    // ── Microphone recording ──────────────────────────────────────────────────
+    private bool _micEnabled;
+    private string? _micDeviceId;
+    private WasapiCapture? _micCapture;
+    private WaveFileWriter? _micWaveFileWriter;
+    private string? _currentMicAudioPath;
+    private WasapiCapture? _retrospectiveMicCapture;
+    private WaveFormat? _retrospectiveMicWaveFormat;
+    private readonly Queue<BufferedAudioChunk> _recentMicAudioChunks = new();
 
     private const int RetrospectiveFailureLogIntervalMs = 2000;
     private const int RetrospectiveFailureBackoffMs = 120;
@@ -239,6 +250,103 @@ public class ScreenRecorder : IDisposable
         Logger.Instance.Log($"Encoding quality preset set to {_encodingQualityPreset}.");
     }
 
+    public void SetMicEnabled(bool enabled)
+    {
+        _micEnabled = enabled;
+        if (enabled)
+            StartRetrospectiveMicCapture();
+        else
+            StopRetrospectiveMicCapture();
+    }
+
+    public void SetMicDeviceId(string? deviceId)
+    {
+        _micDeviceId = string.IsNullOrWhiteSpace(deviceId) ? null : deviceId;
+        if (_micEnabled)
+        {
+            StopRetrospectiveMicCapture();
+            StartRetrospectiveMicCapture();
+        }
+    }
+
+    public static List<(string Id, string Name)> GetMicrophoneDevices()
+    {
+        var devices = new List<(string Id, string Name)>();
+        try
+        {
+            var enumerator = new MMDeviceEnumerator();
+            foreach (var device in enumerator.EnumerateAudioEndPoints(DataFlow.Capture, DeviceState.Active))
+                devices.Add((device.ID, device.FriendlyName));
+        }
+        catch (Exception ex)
+        {
+            Logger.Instance.Log($"Error enumerating microphone devices: {ex.Message}");
+        }
+        return devices;
+    }
+
+    private void StartRetrospectiveMicCapture()
+    {
+        try
+        {
+            StopRetrospectiveMicCapture();
+            WasapiCapture capture = CreateMicCapture();
+            _retrospectiveMicCapture = capture;
+            _retrospectiveMicWaveFormat = CloneWaveFormat(_retrospectiveMicCapture.WaveFormat);
+            _retrospectiveMicCapture.DataAvailable += (s, e) =>
+            {
+                if (_retrospectiveSuspended) return;
+                byte[] audioBytes = new byte[e.BytesRecorded];
+                Buffer.BlockCopy(e.Buffer, 0, audioBytes, 0, e.BytesRecorded);
+                DateTime capturedAt = DateTime.UtcNow;
+                lock (_retrospectiveBufferLock)
+                {
+                    _recentMicAudioChunks.Enqueue(new BufferedAudioChunk(capturedAt, audioBytes));
+                }
+            };
+            _retrospectiveMicCapture.StartRecording();
+            Logger.Instance.Log("Retrospective microphone capture started.");
+        }
+        catch (Exception ex)
+        {
+            Logger.Instance.Log($"Retrospective microphone capture failed: {ex.Message}");
+        }
+    }
+
+    private void StopRetrospectiveMicCapture()
+    {
+        try
+        {
+            _retrospectiveMicCapture?.StopRecording();
+            _retrospectiveMicCapture?.Dispose();
+            _retrospectiveMicCapture = null;
+            lock (_retrospectiveBufferLock) { _recentMicAudioChunks.Clear(); }
+            Logger.Instance.Log("Retrospective microphone capture stopped.");
+        }
+        catch (Exception ex)
+        {
+            Logger.Instance.Log($"Error stopping retrospective microphone capture: {ex.Message}");
+        }
+    }
+
+    private WasapiCapture CreateMicCapture()
+    {
+        if (!string.IsNullOrWhiteSpace(_micDeviceId))
+        {
+            try
+            {
+                var enumerator = new MMDeviceEnumerator();
+                var device = enumerator.GetDevice(_micDeviceId);
+                return new WasapiCapture(device);
+            }
+            catch
+            {
+                Logger.Instance.Log("Could not open configured mic device; falling back to default.");
+            }
+        }
+        return new WasapiCapture();
+    }
+
     public bool SaveLast15Seconds()
     {
         return SaveRecentClip();
@@ -256,12 +364,16 @@ public class ScreenRecorder : IDisposable
         BufferedFrame[] frames;
         BufferedAudioChunk[] audioChunks;
         WaveFormat? waveFormatCopy;
+        BufferedAudioChunk[] micChunks;
+        WaveFormat? micWaveFormatCopy;
 
         lock (_retrospectiveBufferLock)
         {
             frames = _recentFrames.Where(frame => frame.Timestamp >= cutoff).ToArray();
             audioChunks = _recentAudioChunks.Where(chunk => chunk.Timestamp >= cutoff).ToArray();
             waveFormatCopy = CloneWaveFormat(_retrospectiveWaveFormat);
+            micChunks = _micEnabled ? _recentMicAudioChunks.Where(c => c.Timestamp >= cutoff).ToArray() : Array.Empty<BufferedAudioChunk>();
+            micWaveFormatCopy = _micEnabled ? CloneWaveFormat(_retrospectiveMicWaveFormat) : null;
         }
 
         if (frames.Length == 0)
@@ -271,7 +383,7 @@ public class ScreenRecorder : IDisposable
         }
 
         Logger.Instance.Log($"Saving retrospective clip with {frames.Length} buffered frames.");
-        _ = Task.Run(() => PersistRetrospectiveClip(frames, audioChunks, waveFormatCopy));
+        _ = Task.Run(() => PersistRetrospectiveClip(frames, audioChunks, waveFormatCopy, micChunks, micWaveFormatCopy));
         return true;
     }
 
@@ -401,14 +513,13 @@ public class ScreenRecorder : IDisposable
         DateTime cutoff = referenceTime - TimeSpan.FromSeconds(RetrospectiveDurationSeconds + 2);
 
         while (_recentFrames.Count > 0 && _recentFrames.Peek().Timestamp < cutoff)
-        {
             _recentFrames.Dequeue();
-        }
 
         while (_recentAudioChunks.Count > 0 && _recentAudioChunks.Peek().Timestamp < cutoff)
-        {
             _recentAudioChunks.Dequeue();
-        }
+
+        while (_recentMicAudioChunks.Count > 0 && _recentMicAudioChunks.Peek().Timestamp < cutoff)
+            _recentMicAudioChunks.Dequeue();
     }
 
     private WaveFormat? CloneWaveFormat(WaveFormat? waveFormat)
@@ -428,12 +539,13 @@ public class ScreenRecorder : IDisposable
         );
     }
 
-    private void PersistRetrospectiveClip(BufferedFrame[] frames, BufferedAudioChunk[] audioChunks, WaveFormat? waveFormat)
+    private void PersistRetrospectiveClip(BufferedFrame[] frames, BufferedAudioChunk[] audioChunks, WaveFormat? waveFormat, BufferedAudioChunk[] micChunks, WaveFormat? micWaveFormat)
     {
         int clipFps = Math.Max(5, RecordingFps);
         string timestamp = DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss-fff");
         string rawVideoPath = Path.Combine(_videosFolder, $"instant_replay_{timestamp}_raw.avi");
-        string audioPath = Path.Combine(_videosFolder, $"instant_replay_{timestamp}.wav");
+        string audioPath    = Path.Combine(_videosFolder, $"instant_replay_{timestamp}.wav");
+        string micAudioPath = Path.Combine(_videosFolder, $"instant_replay_{timestamp}_mic.wav");
         string finalVideoPath = Path.Combine(_videosFolder, $"instant_replay_{timestamp}.mp4");
 
         var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -441,8 +553,10 @@ public class ScreenRecorder : IDisposable
 
         try
         {
-            bool wroteVideo = WriteRetrospectiveVideo(frames, rawVideoPath, clipFps);
-            bool wroteAudio = WriteRetrospectiveAudio(audioChunks, waveFormat, audioPath);
+            bool wroteVideo    = WriteRetrospectiveVideo(frames, rawVideoPath, clipFps);
+            bool wroteAudio    = WriteRetrospectiveAudio(audioChunks, waveFormat, audioPath);
+            bool wroteMicAudio = micChunks.Length > 0 && micWaveFormat != null
+                                 && WriteRetrospectiveAudio(micChunks, micWaveFormat, micAudioPath);
 
             if (!wroteVideo)
             {
@@ -455,23 +569,19 @@ public class ScreenRecorder : IDisposable
 
             if (wroteAudio)
             {
-                savedOutput = MergeAudioVideo(rawVideoPath, audioPath, finalVideoPath);
+                savedOutput = MergeAudioVideo(rawVideoPath, audioPath, finalVideoPath, wroteMicAudio ? micAudioPath : null);
             }
             else
             {
                 savedOutput = ConvertVideoToMp4(rawVideoPath, finalVideoPath, clipFps);
                 if (savedOutput && File.Exists(rawVideoPath))
-                {
                     File.Delete(rawVideoPath);
-                }
             }
 
             if (savedOutput)
             {
-                if (!wroteAudio && File.Exists(audioPath))
-                {
-                    File.Delete(audioPath);
-                }
+                if (!wroteAudio && File.Exists(audioPath)) File.Delete(audioPath);
+                if (!wroteMicAudio && File.Exists(micAudioPath)) File.Delete(micAudioPath);
 
                 Logger.Instance.Log($"Retrospective clip saved to: {finalVideoPath}");
                 tcs.TrySetResult(finalVideoPath);
@@ -696,6 +806,8 @@ public class ScreenRecorder : IDisposable
             // Stop audio recording
             Logger.Instance.Log("Stopping audio recording...");
             StopAudioRecording();
+            string? micAudioPath = _currentMicAudioPath;
+            _currentMicAudioPath = null;
 
             // Notify UI that processing is starting so dialog can open immediately
             tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -706,7 +818,7 @@ public class ScreenRecorder : IDisposable
             if (File.Exists(rawVideoPath) && File.Exists(audioPath))
             {
                 Logger.Instance.Log("Merging audio and video...");
-                bool muxed = MergeAudioVideo(rawVideoPath, audioPath, finalVideoPath);
+                bool muxed = MergeAudioVideo(rawVideoPath, audioPath, finalVideoPath, micAudioPath);
                 if (muxed)
                 {
                     Logger.Instance.Log($"Video saved to: {finalVideoPath}");
@@ -790,9 +902,7 @@ public class ScreenRecorder : IDisposable
             _loopbackCapture.DataAvailable += (s, e) =>
             {
                 if (_waveFileWriter != null)
-                {
                     _waveFileWriter.Write(e.Buffer, 0, e.BytesRecorded);
-                }
             };
 
             _loopbackCapture.StartRecording();
@@ -801,6 +911,26 @@ public class ScreenRecorder : IDisposable
         catch (Exception ex)
         {
             Logger.Instance.Log($"Audio recording failed: {ex.Message}");
+        }
+
+        if (_micEnabled)
+        {
+            string micPath = Path.ChangeExtension(audioPath, null) + "_mic.wav";
+            try
+            {
+                WasapiCapture mic = CreateMicCapture();
+                _micCapture = mic;
+                _micWaveFileWriter = new WaveFileWriter(micPath, _micCapture.WaveFormat);
+                _micCapture.DataAvailable += (s, e) => _micWaveFileWriter?.Write(e.Buffer, 0, e.BytesRecorded);
+                _micCapture.StartRecording();
+                _currentMicAudioPath = micPath;
+                Logger.Instance.Log("Microphone recording started.");
+            }
+            catch (Exception ex)
+            {
+                Logger.Instance.Log($"Microphone recording failed to start: {ex.Message}");
+                _currentMicAudioPath = null;
+            }
         }
     }
 
@@ -819,9 +949,22 @@ public class ScreenRecorder : IDisposable
         {
             Logger.Instance.Log($"Error stopping audio recording: {ex.Message}");
         }
+
+        try
+        {
+            _micCapture?.StopRecording();
+            _micCapture?.Dispose();
+            _micCapture = null;
+            _micWaveFileWriter?.Dispose();
+            _micWaveFileWriter = null;
+        }
+        catch (Exception ex)
+        {
+            Logger.Instance.Log($"Error stopping microphone recording: {ex.Message}");
+        }
     }
 
-    private bool MergeAudioVideo(string rawVideoPath, string audioPath, string outputPath)
+    private bool MergeAudioVideo(string rawVideoPath, string audioPath, string outputPath, string? micAudioPath = null)
     {
         try
         {
@@ -873,15 +1016,51 @@ public class ScreenRecorder : IDisposable
                 return false;
             }
 
+            // Stage mic audio if provided
+            string? ffmpegMicInputPath = null;
+            string? stagedMicPath = null;
+            bool hasMic = !string.IsNullOrWhiteSpace(micAudioPath) && File.Exists(micAudioPath);
+            if (hasMic)
+            {
+                ffmpegMicInputPath = micAudioPath;
+                try
+                {
+                    string tempDir = Path.Combine(Path.GetTempPath(), "bug-reporter-ffmpeg");
+                    Directory.CreateDirectory(tempDir);
+                    stagedMicPath = Path.Combine(tempDir, $"mux_{Guid.NewGuid():N}_mic.wav");
+                    File.Copy(micAudioPath!, stagedMicPath, true);
+                    ffmpegMicInputPath = stagedMicPath;
+                }
+                catch (Exception ex)
+                {
+                    Logger.Instance.Log($"Mic staging copy failed, using original file: {ex.Message}");
+                }
+            }
+
             // Try preferred modern encoding first, then fallback for older FFmpeg builds.
             string filter = BuildEncodeFilter();
             (string x264Preset, int crf, int mpegQ) = GetEncodingParams();
-            string[] ffmpegArguments =
+            string[] ffmpegArguments;
+
+            if (hasMic && ffmpegMicInputPath != null)
             {
-                $"-y -color_range mpeg -i \"{ffmpegRawInputPath}\" -i \"{ffmpegAudioInputPath}\" -vf \"{filter}\" -c:v libx264 -preset {x264Preset} -crf {crf} -color_range pc -r {RecordingFps} -c:a aac -b:a 128k -movflags +faststart -shortest \"{outputPath}\"",
-                $"-y -color_range mpeg -i \"{ffmpegRawInputPath}\" -i \"{ffmpegAudioInputPath}\" -vf \"{filter}\" -c:v libx264 -preset veryfast -crf 24 -r {RecordingFps} -c:a aac -b:a 128k -movflags +faststart -shortest \"{outputPath}\"",
-                $"-y -color_range mpeg -i \"{ffmpegRawInputPath}\" -i \"{ffmpegAudioInputPath}\" -vf \"{filter}\" -c:v mpeg4 -q:v {mpegQ} -r {RecordingFps} -c:a aac -b:a 128k -movflags +faststart -shortest \"{outputPath}\""
-            };
+                // Mix system audio + mic using filter_complex amix
+                ffmpegArguments = new[]
+                {
+                    $"-y -color_range mpeg -i \"{ffmpegRawInputPath}\" -i \"{ffmpegAudioInputPath}\" -i \"{ffmpegMicInputPath}\" -filter_complex \"[0:v]{filter}[vout];[1:a][2:a]amix=inputs=2:duration=longest[aout]\" -map \"[vout]\" -map \"[aout]\" -c:v libx264 -preset {x264Preset} -crf {crf} -color_range pc -r {RecordingFps} -c:a aac -b:a 128k -movflags +faststart \"{outputPath}\"",
+                    $"-y -color_range mpeg -i \"{ffmpegRawInputPath}\" -i \"{ffmpegAudioInputPath}\" -i \"{ffmpegMicInputPath}\" -filter_complex \"[0:v]{filter}[vout];[1:a][2:a]amix=inputs=2:duration=longest[aout]\" -map \"[vout]\" -map \"[aout]\" -c:v libx264 -preset veryfast -crf 24 -r {RecordingFps} -c:a aac -b:a 128k -movflags +faststart \"{outputPath}\"",
+                    $"-y -color_range mpeg -i \"{ffmpegRawInputPath}\" -i \"{ffmpegAudioInputPath}\" -i \"{ffmpegMicInputPath}\" -filter_complex \"[1:a][2:a]amix=inputs=2:duration=longest[aout]\" -map 0:v -map \"[aout]\" -vf \"{filter}\" -c:v mpeg4 -q:v {mpegQ} -r {RecordingFps} -c:a aac -b:a 128k -movflags +faststart \"{outputPath}\""
+                };
+            }
+            else
+            {
+                ffmpegArguments = new[]
+                {
+                    $"-y -color_range mpeg -i \"{ffmpegRawInputPath}\" -i \"{ffmpegAudioInputPath}\" -vf \"{filter}\" -c:v libx264 -preset {x264Preset} -crf {crf} -color_range pc -r {RecordingFps} -c:a aac -b:a 128k -movflags +faststart -shortest \"{outputPath}\"",
+                    $"-y -color_range mpeg -i \"{ffmpegRawInputPath}\" -i \"{ffmpegAudioInputPath}\" -vf \"{filter}\" -c:v libx264 -preset veryfast -crf 24 -r {RecordingFps} -c:a aac -b:a 128k -movflags +faststart -shortest \"{outputPath}\"",
+                    $"-y -color_range mpeg -i \"{ffmpegRawInputPath}\" -i \"{ffmpegAudioInputPath}\" -vf \"{filter}\" -c:v mpeg4 -q:v {mpegQ} -r {RecordingFps} -c:a aac -b:a 128k -movflags +faststart -shortest \"{outputPath}\""
+                };
+            }
 
             bool muxSucceeded = false;
             foreach (string arguments in ffmpegArguments)
@@ -899,6 +1078,8 @@ public class ScreenRecorder : IDisposable
                     File.Delete(stagedRawPath);
                 if (!string.IsNullOrWhiteSpace(stagedAudioPath) && File.Exists(stagedAudioPath))
                     File.Delete(stagedAudioPath);
+                if (!string.IsNullOrWhiteSpace(stagedMicPath) && File.Exists(stagedMicPath))
+                    File.Delete(stagedMicPath);
                 return false;
             }
 
@@ -922,24 +1103,20 @@ public class ScreenRecorder : IDisposable
             {
                 Logger.Instance.Log("Mux output validation failed: no video/audio streams detected in output file.");
                 Logger.Instance.Log($"Output file size: {outputSize} bytes. FFmpeg may have produced an empty container.");
-                if (File.Exists(outputPath))
-                    File.Delete(outputPath);
-                if (!string.IsNullOrWhiteSpace(stagedRawPath) && File.Exists(stagedRawPath))
-                    File.Delete(stagedRawPath);
-                if (!string.IsNullOrWhiteSpace(stagedAudioPath) && File.Exists(stagedAudioPath))
-                    File.Delete(stagedAudioPath);
+                if (File.Exists(outputPath)) File.Delete(outputPath);
+                if (!string.IsNullOrWhiteSpace(stagedRawPath) && File.Exists(stagedRawPath)) File.Delete(stagedRawPath);
+                if (!string.IsNullOrWhiteSpace(stagedAudioPath) && File.Exists(stagedAudioPath)) File.Delete(stagedAudioPath);
+                if (!string.IsNullOrWhiteSpace(stagedMicPath) && File.Exists(stagedMicPath)) File.Delete(stagedMicPath);
                 return false;
             }
 
             // Delete temporary files only on successful mux
-            if (File.Exists(rawVideoPath))
-                File.Delete(rawVideoPath);
-            if (File.Exists(audioPath))
-                File.Delete(audioPath);
-            if (!string.IsNullOrWhiteSpace(stagedRawPath) && File.Exists(stagedRawPath))
-                File.Delete(stagedRawPath);
-            if (!string.IsNullOrWhiteSpace(stagedAudioPath) && File.Exists(stagedAudioPath))
-                File.Delete(stagedAudioPath);
+            if (File.Exists(rawVideoPath)) File.Delete(rawVideoPath);
+            if (File.Exists(audioPath)) File.Delete(audioPath);
+            if (hasMic && !string.IsNullOrWhiteSpace(micAudioPath) && File.Exists(micAudioPath!)) File.Delete(micAudioPath!);
+            if (!string.IsNullOrWhiteSpace(stagedRawPath) && File.Exists(stagedRawPath)) File.Delete(stagedRawPath);
+            if (!string.IsNullOrWhiteSpace(stagedAudioPath) && File.Exists(stagedAudioPath)) File.Delete(stagedAudioPath);
+            if (!string.IsNullOrWhiteSpace(stagedMicPath) && File.Exists(stagedMicPath)) File.Delete(stagedMicPath);
 
             Logger.Instance.Log("Audio and video merged successfully.");
             return true;
