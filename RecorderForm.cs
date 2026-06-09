@@ -1053,7 +1053,13 @@ public partial class RecorderForm : Form
                     try
                     {
                         string fileName = Path.GetFileName(contextFilePath);
-                        byte[] fileBytes = File.ReadAllBytes(contextFilePath);
+                        byte[] fileBytes;
+                        using (var fs = new FileStream(contextFilePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+                        using (var ms = new MemoryStream())
+                        {
+                            fs.CopyTo(ms);
+                            fileBytes = ms.ToArray();
+                        }
                         var fileContent = new ByteArrayContent(fileBytes);
 
                         string ext = Path.GetExtension(contextFilePath).ToLowerInvariant();
