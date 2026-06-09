@@ -103,6 +103,7 @@ public partial class RecorderForm : Form
     private sealed record MicDeviceItem(string Id, string Name) { public override string ToString() => Name; }
 
     private const long MaxApiVideoBytes = 4 * 1024 * 1024;
+    private const int MaxApiContextFileBytes = 512 * 1024; // 512 KB per context file
 
     public RecorderForm()
     {
@@ -1053,15 +1054,6 @@ public partial class RecorderForm : Form
                     try
                     {
                         string fileName = Path.GetFileName(contextFilePath);
-                        byte[] fileBytes;
-                        using (var fs = new FileStream(contextFilePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
-                        using (var ms = new MemoryStream())
-                        {
-                            fs.CopyTo(ms);
-                            fileBytes = ms.ToArray();
-                        }
-                        var fileContent = new ByteArrayContent(fileBytes);
-
                         string ext = Path.GetExtension(contextFilePath).ToLowerInvariant();
                         string mimeType = ext switch
                         {
@@ -1073,6 +1065,38 @@ public partial class RecorderForm : Form
                             _ => "application/octet-stream"
                         };
 
+                        byte[] fileBytes;
+                        using (var fs = new FileStream(contextFilePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+                        {
+                            long fileSize = fs.Length;
+                            bool isTextFile = mimeType.StartsWith("text/", StringComparison.Ordinal);
+                            if (fileSize > MaxApiContextFileBytes)
+                            {
+                                if (isTextFile)
+                                {
+                                    // Send the tail — most recent content is most relevant for bug reports
+                                    byte[] tail = new byte[MaxApiContextFileBytes];
+                                    fs.Seek(-MaxApiContextFileBytes, SeekOrigin.End);
+                                    fs.ReadExactly(tail, 0, MaxApiContextFileBytes);
+                                    byte[] header = Encoding.UTF8.GetBytes($"[Truncated: showing last {MaxApiContextFileBytes / 1024} KB of {fileSize / 1024} KB]\n");
+                                    fileBytes = [.. header, .. tail];
+                                    Logger.Instance.Log($"Context file {fileName} truncated from {fileSize} to ~{MaxApiContextFileBytes} bytes (tail).");
+                                }
+                                else
+                                {
+                                    Logger.Instance.Log($"Skipped context file {fileName}: {fileSize} bytes exceeds {MaxApiContextFileBytes} byte limit for non-text files.");
+                                    continue;
+                                }
+                            }
+                            else
+                            {
+                                using var ms = new MemoryStream((int)fileSize);
+                                fs.CopyTo(ms);
+                                fileBytes = ms.ToArray();
+                            }
+                        }
+
+                        var fileContent = new ByteArrayContent(fileBytes);
                         fileContent.Headers.ContentType = new MediaTypeHeaderValue(mimeType);
                         // Use filename as field name to keep each file unique and avoid conflicts with context.json
                         string fieldName = fileName;
