@@ -78,6 +78,8 @@ public class FeedbackReportDialog : Form
     private long _trimEndMs;
     private bool _dragTrimStart;
     private bool _dragTrimEnd;
+    private bool _isSeeking;
+    private bool _wasPlayingBeforeSeek;
 
     private delegate IntPtr LowLevelKeyboardProc(int nCode, IntPtr wParam, IntPtr lParam);
 
@@ -190,7 +192,9 @@ public class FeedbackReportDialog : Form
             Minimum = 0, Maximum = 1000, TickStyle = TickStyle.None,
             TabStop = false, Enabled = false, BackColor = Surface
         };
-        _seekBar.Scroll += SeekBar_Scroll;
+        _seekBar.Scroll    += SeekBar_Scroll;
+        _seekBar.MouseDown += SeekBar_MouseDown;
+        _seekBar.MouseUp   += SeekBar_MouseUp;
 
         _trimStartHandle = new Panel { Size = new Size(8, 18), BackColor = Color.FromArgb(90, 200, 120), Cursor = Cursors.SizeWE };
         _trimEndHandle = new Panel { Size = new Size(8, 18), BackColor = Color.FromArgb(255, 120, 120), Cursor = Cursors.SizeWE };
@@ -282,7 +286,11 @@ public class FeedbackReportDialog : Form
             {
                 _isPlaying = false;
                 _playPauseButton.Text = "Play";
-                SeekTo(GetTrimEndMs());
+                // Re-arm the player back into a paused state so seeking and replay work.
+                // After EndReached, LibVLC enters Ended state where Time setter is ignored.
+                _mediaPlayer.Play();
+                _mediaPlayer.SetPause(true);
+                SeekTo(GetTrimStartMs());
             }));
         };
         _videoBox.MediaPlayer = _mediaPlayer;
@@ -471,7 +479,7 @@ public class FeedbackReportDialog : Form
 
     private void SyncUiToPlayer()
     {
-        if (_mediaPlayer.Media == null) return;
+        if (_mediaPlayer.Media == null || _isSeeking) return;
 
         long reportedLength = Math.Max(0, _mediaPlayer.Length);
         if (reportedLength > 0 && reportedLength != _durationMs)
@@ -513,6 +521,19 @@ public class FeedbackReportDialog : Form
         }
 
         SeekTo(target);
+    }
+
+    private void SeekBar_MouseDown(object? sender, MouseEventArgs e)
+    {
+        _isSeeking = true;
+        _wasPlayingBeforeSeek = _isPlaying;
+        if (_isPlaying) PausePlayback();
+    }
+
+    private void SeekBar_MouseUp(object? sender, MouseEventArgs e)
+    {
+        _isSeeking = false;
+        if (_wasPlayingBeforeSeek) StartPlayback();
     }
 
     private void SeekTo(long fi)
