@@ -44,6 +44,10 @@
       <CopyToPublishDirectory>Always</CopyToPublishDirectory>
       <Link>tools\ffmpeg\bin\%(RecursiveDir)%(Filename)%(Extension)</Link>
     </None>
+    <None Include="THIRD_PARTY_NOTICES.md">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>Always</CopyToPublishDirectory>
+    </None>
     <None Include="tools\ffmpeg\LICENSE.txt" Condition="Exists('tools\\ffmpeg\\LICENSE.txt')">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>Always</CopyToPublishDirectory>

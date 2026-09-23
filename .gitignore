@@ -49,3 +49,6 @@ user.config
 # Tools - committed so machines are pre-configured, no manual setup needed
 !tools/
 !tools/**
+
+# Claude Code local session config (per-machine permission rules)
+.claude/settings.local.json
