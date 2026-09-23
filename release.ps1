@@ -118,14 +118,23 @@ Step "Creating GitHub release $tag"
 gh release create $tag $zip --repo $Repo --target main --title $tag --notes $Notes
 if ($LASTEXITCODE -ne 0) { Fail "gh release create failed. Tag and commit are pushed; fix and run: gh release create $tag $zip --repo $Repo --title $tag" }
 
-$localSize  = (Get-Item $zip).Length
-$remoteSize = gh release view $tag --repo $Repo --json assets --jq '.assets[] | select(.name=="bug-reporter-win.zip") | .size'
-if ("$remoteSize" -ne "$localSize") {
-    Write-Host "    Asset listing lagged or mismatched (remote '$remoteSize' vs local $localSize); re-checking via API"
-    $releaseId  = gh api "repos/$Repo/releases/tags/$tag" --jq '.id'
-    $remoteSize = gh api "repos/$Repo/releases/$releaseId/assets" --jq '.[] | select(.name=="bug-reporter-win.zip") | .size'
+$localSize = (Get-Item $zip).Length
+# Parse JSON in PowerShell rather than passing a jq filter with embedded quotes; PowerShell 5.1
+# strips inner double quotes from native-command arguments.
+function Get-RemoteAssetSize {
+    $releaseId = (gh api "repos/$Repo/releases/tags/$tag" --jq '.id' | Out-String).Trim()
+    if (-not $releaseId) { return $null }
+    $assets = gh api "repos/$Repo/releases/$releaseId/assets" | ConvertFrom-Json
+    $asset = $assets | Where-Object { $_.name -eq 'bug-reporter-win.zip' } | Select-Object -First 1
+    if ($asset) { return [int64]$asset.size } else { return $null }
 }
-if ("$remoteSize" -ne "$localSize") { Fail "Uploaded asset size ($remoteSize) does not match local zip ($localSize). Re-upload with: gh release upload $tag $zip --repo $Repo --clobber" }
+$remoteSize = Get-RemoteAssetSize
+if ($null -eq $remoteSize -or $remoteSize -ne $localSize) {
+    Write-Host "    Asset listing lagged or mismatched (remote '$remoteSize' vs local $localSize); retrying in 5s"
+    Start-Sleep -Seconds 5
+    $remoteSize = Get-RemoteAssetSize
+}
+if ($null -eq $remoteSize -or $remoteSize -ne $localSize) { Fail "Uploaded asset size ($remoteSize) does not match local zip ($localSize). Re-upload with: gh release upload $tag $zip --repo $Repo --clobber" }
 
 # ── 8. Cleanup ────────────────────────────────────────────────────────────────
 Remove-Item $zip -Force
