@@ -79,6 +79,13 @@ public partial class RecorderForm : Form
     private Label? _saveClipKeyLabel;
     private Label? _retrospectiveDurationLabel;
     private Label? _recordingFpsLabel;
+    private Panel? _updateBanner;
+    private Label? _updateLabel;
+    private Button? _updateNowButton;
+    private Button? _updateNotesButton;
+    private Button? _updateLaterButton;
+    private UpdateInfo? _pendingUpdate;
+    private bool _updateInProgress;
     private Label? _selectedMonitorLabel;
     private Label? _instructionsLabel;
     private ComboBox? _monitorComboBox;
@@ -111,11 +118,12 @@ public partial class RecorderForm : Form
         SetupUI();
         SetupNotifyIcon();
         SetupRecorder();
+        ScheduleStartupUpdateCheck();
     }
 
     private void InitializeComponent()
     {
-        Text = "Bug Reporter";
+        Text = $"Bug Reporter {UpdateManager.CurrentVersionString}";
         ClientSize = new Size(800, 600);
         StartPosition = FormStartPosition.CenterScreen;
         FormBorderStyle = FormBorderStyle.Sizable;
@@ -165,6 +173,21 @@ public partial class RecorderForm : Form
         var tbIcon = MkLabel("⏺", 13, false, RedColor);   tbIcon.Location = new Point(16, 10);
 
         titleBar.Controls.AddRange(new Control[] { tbIcon });
+
+        // 1b. Update banner – Dock.Top, hidden until a newer release is found
+        _updateBanner = new Panel { Height = 40, Dock = DockStyle.Top, BackColor = Color.FromArgb(24, 56, 96), Visible = false };
+        _updateLabel = MkLabel("", 9, true, TextColor); _updateLabel.Location = new Point(20, 11);
+        var updateButtons = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Right, FlowDirection = FlowDirection.LeftToRight, WrapContents = false,
+            AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, BackColor = Color.Transparent,
+            Padding = new Padding(0, 7, 12, 0), Margin = Padding.Empty
+        };
+        _updateNowButton   = MkBtn("Update now", BlueColor, 104, 26);       _updateNowButton.Margin   = new Padding(0, 0, 8, 0); _updateNowButton.Click   += UpdateNowButton_Click;
+        _updateNotesButton = MkBtn("Release notes", Surface2Color, 112, 26); _updateNotesButton.Margin = new Padding(0, 0, 8, 0); _updateNotesButton.ForeColor = Text2Color; _updateNotesButton.Click += UpdateNotesButton_Click;
+        _updateLaterButton = MkBtn("Later", Surface2Color, 70, 26);         _updateLaterButton.Margin = Padding.Empty;            _updateLaterButton.ForeColor = Text2Color; _updateLaterButton.Click += (_, _) => HideUpdateBanner();
+        updateButtons.Controls.AddRange(new Control[] { _updateNowButton, _updateNotesButton, _updateLaterButton });
+        _updateBanner.Controls.AddRange(new Control[] { _updateLabel, updateButtons });
 
         // 2. Status area – Dock.Top
         Panel statusPanel = new Panel { Height = 80, Dock = DockStyle.Top, BackColor = BgColor };
@@ -306,7 +329,7 @@ public partial class RecorderForm : Form
         logOuter.Controls.Add(logHeader);
 
         // Assemble in REVERSE visual order: last added = topmost with Dock.Top
-        Controls.AddRange(new Control[] { logOuter, MkDiv(), actPanel, MkDiv(), cfgPanel, MkDiv(), statusPanel, titleBar });
+        Controls.AddRange(new Control[] { logOuter, MkDiv(), actPanel, MkDiv(), cfgPanel, MkDiv(), statusPanel, _updateBanner, titleBar });
 
         Logger.Instance.Subscribe(msg =>
         {
@@ -625,6 +648,141 @@ public partial class RecorderForm : Form
         }
     }
 
+    // ── Updates ───────────────────────────────────────────────────────────────
+    private void ScheduleStartupUpdateCheck()
+    {
+        var timer = new System.Windows.Forms.Timer { Interval = 3000 };
+        timer.Tick += async (_, _) =>
+        {
+            timer.Stop();
+            timer.Dispose();
+            await CheckForUpdatesAsync(userInitiated: false);
+        };
+        timer.Start();
+    }
+
+    private async Task CheckForUpdatesAsync(bool userInitiated)
+    {
+        if (_updateInProgress) return;
+        try
+        {
+            UpdateInfo? update = await Task.Run(() => UpdateManager.CheckForUpdateAsync());
+            if (update == null)
+            {
+                Logger.Instance.Log($"Update check: {UpdateManager.CurrentVersionString} is the latest version.");
+                if (userInitiated)
+                    MessageBox.Show($"You are running the latest version ({UpdateManager.CurrentVersionString}).", "Bug Reporter", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            Logger.Instance.Log($"Update available: {update.VersionString} (running {UpdateManager.CurrentVersionString}).");
+            ShowUpdateBanner(update);
+            if (userInitiated)
+                MessageBox.Show($"{update.VersionString} is available. Use the Update now button at the top of the main window to install it.", "Bug Reporter", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+        catch (Exception ex)
+        {
+            Logger.Instance.Log($"Update check failed: {ex.Message}");
+            if (userInitiated)
+                MessageBox.Show($"Could not check for updates.\n\n{ex.Message}", "Bug Reporter", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+    }
+
+    private void ShowUpdateBanner(UpdateInfo update)
+    {
+        if (InvokeRequired) { Invoke(() => ShowUpdateBanner(update)); return; }
+        _pendingUpdate = update;
+        _updateLabel!.Text = $"Update available: {update.VersionString}   (you have {UpdateManager.CurrentVersionString})";
+        _updateNowButton!.Enabled = _recorder?.IsRecording != true && !_updateInProgress;
+        _updateNotesButton!.Enabled = true;
+        _updateLaterButton!.Enabled = true;
+        _updateBanner!.Visible = true;
+    }
+
+    private void HideUpdateBanner()
+    {
+        if (_updateInProgress) return;
+        _updateBanner!.Visible = false;
+    }
+
+    private async void UpdateNowButton_Click(object? sender, EventArgs e)
+    {
+        if (_pendingUpdate == null || _updateInProgress) return;
+        if (_recorder?.IsRecording == true)
+        {
+            MessageBox.Show("Stop the current recording before updating.", "Bug Reporter", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        UpdateInfo update = _pendingUpdate;
+        _updateInProgress = true;
+        _updateNowButton!.Enabled = false;
+        _updateNotesButton!.Enabled = false;
+        _updateLaterButton!.Enabled = false;
+        _startButton!.Enabled = false;
+        // Block the record hotkey too: the app exits the moment the download is staged.
+        _keyboardListener?.StopListening();
+
+        var progress = new Progress<double>(p => _updateLabel!.Text = $"Downloading {update.VersionString}…  {p * 100:0}%");
+        try
+        {
+            _updateLabel!.Text = $"Downloading {update.VersionString}…";
+            await Task.Run(() => UpdateManager.DownloadAndStageAsync(update, progress));
+            _updateLabel.Text = "Installing update, restarting…";
+            Logger.Instance.Log("Exiting to apply update.");
+            Application.Exit();
+        }
+        catch (Exception ex)
+        {
+            Logger.Instance.Log($"Update failed: {ex.Message}");
+            _updateInProgress = false;
+            _updateLabel!.Text = $"Update failed: {ex.Message}";
+            _updateNowButton.Enabled = true;
+            _updateNotesButton.Enabled = true;
+            _updateLaterButton.Enabled = true;
+            _startButton.Enabled = true;
+            RestartKeyboardListener();
+            MessageBox.Show($"The update could not be installed.\n\n{ex.Message}", "Bug Reporter", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
+    private void UpdateNotesButton_Click(object? sender, EventArgs e)
+    {
+        if (_pendingUpdate == null) return;
+        UpdateInfo update = _pendingUpdate;
+
+        using var dlg = new Form
+        {
+            Text = $"Release notes {update.VersionString}",
+            ClientSize = new Size(560, 420),
+            StartPosition = FormStartPosition.CenterParent,
+            FormBorderStyle = FormBorderStyle.FixedDialog,
+            MinimizeBox = false, MaximizeBox = false, ShowInTaskbar = false,
+            BackColor = BgColor
+        };
+        var title = MkLabel($"What's new in {update.VersionString}", 12, true, TextColor); title.Location = new Point(20, 16);
+        var box = new TextBox
+        {
+            Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, TabStop = false,
+            Location = new Point(20, 50), Size = new Size(520, 300),
+            Font = new Font("Segoe UI", 9), BackColor = SurfaceColor, ForeColor = TextColor, BorderStyle = BorderStyle.None,
+            Text = string.IsNullOrWhiteSpace(update.ReleaseNotes)
+                ? "No release notes were provided for this version."
+                : update.ReleaseNotes.Replace("\r\n", "\n").Replace("\n", Environment.NewLine)
+        };
+        var openBtn = MkBtn("Open on GitHub", Surface2Color, 140, 32); openBtn.Location = new Point(20, 368); openBtn.ForeColor = Text2Color;
+        openBtn.Click += (_, _) =>
+        {
+            try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(update.ReleasePageUrl) { UseShellExecute = true }); }
+            catch (Exception ex) { Logger.Instance.Log($"Could not open release page: {ex.Message}"); }
+        };
+        var closeBtn = MkBtn("Close", BlueColor, 100, 32); closeBtn.Location = new Point(440, 368); closeBtn.DialogResult = DialogResult.OK;
+        dlg.Controls.AddRange(new Control[] { title, box, openBtn, closeBtn });
+        dlg.AcceptButton = closeBtn;
+        dlg.ActiveControl = closeBtn;
+        dlg.ShowDialog(this);
+    }
+
     // ── Button handlers ───────────────────────────────────────────────────────
     private void ChangeKeyButton_Click(object? sender, EventArgs e)
     {
@@ -661,7 +819,8 @@ public partial class RecorderForm : Form
             currentFolder,
             currentFiles,
             _settings.GetFeedbackApiEndpoint(),
-            _settings.GetFeedbackApiKey());
+            _settings.GetFeedbackApiKey(),
+            onCheckForUpdates: () => _ = CheckForUpdatesAsync(userInitiated: true));
         if (dlg.ShowDialog(this) == DialogResult.OK)
         {
             _settings.SetOutputFolder(dlg.OutputFolder);
@@ -1264,6 +1423,9 @@ public partial class RecorderForm : Form
     private void UpdateUI(bool isRecording)
     {
         if (InvokeRequired) { Invoke(() => UpdateUI(isRecording)); return; }
+
+        // Never swap files mid-recording; the banner's Update button waits for Stop.
+        if (_updateNowButton != null) _updateNowButton.Enabled = !isRecording && !_updateInProgress;
 
         if (isRecording)
         {

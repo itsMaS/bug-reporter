@@ -43,7 +43,8 @@ public class ContextSettingsDialog : Form
         string currentOutputFolder,
         List<string> currentContextFiles,
         string currentApiEndpoint,
-        string currentApiKey)
+        string currentApiKey,
+        Action? onCheckForUpdates = null)
     {
         Text = "Settings";
         ClientSize = new Size(680, 570);
@@ -141,7 +142,10 @@ public class ContextSettingsDialog : Form
         Panel bottomBar = new Panel { Location = new Point(0, 508), Size = new Size(680, 62), BackColor = Surface };
         var saveBtn   = RecorderForm.MkBtn("Save",   Green, 110, 40); saveBtn.Location   = new Point(450, 11); saveBtn.DialogResult   = DialogResult.OK;
         var cancelBtn = RecorderForm.MkBtn("Cancel", Red,   110, 40); cancelBtn.Location = new Point(568, 11); cancelBtn.DialogResult = DialogResult.Cancel;
-        bottomBar.Controls.AddRange(new Control[] { saveBtn, cancelBtn });
+        var versionLbl = RecorderForm.MkLabel(UpdateManager.CurrentVersionString, 8f, false, Tx2); versionLbl.Location = new Point(20, 23);
+        var updateBtn = RecorderForm.MkBtn("Check for updates", Surface2, 150, 30); updateBtn.Location = new Point(88, 16); updateBtn.ForeColor = Tx2;
+        updateBtn.Click += (_, _) => onCheckForUpdates?.Invoke();
+        bottomBar.Controls.AddRange(new Control[] { versionLbl, updateBtn, saveBtn, cancelBtn });
 
         AcceptButton = saveBtn;
         CancelButton = cancelBtn;
