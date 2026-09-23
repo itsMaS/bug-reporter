@@ -600,7 +600,11 @@ public partial class RecorderForm : Form
 
     private async Task FlashMonitorBorderAsync(Screen screen)
     {
-        Rectangle bounds = GetPhysicalBounds(screen);
+        // Window placement uses the same coordinate space Screen.Bounds reports (logical
+        // pixels in the process's DPI mode). Physical bounds from EnumDisplaySettings are
+        // only for capture; using them here lands the window on the wrong monitor when
+        // display scaling is not 100%.
+        Rectangle bounds = screen.Bounds;
         Logger.Instance.Log($"Flashing monitor: {screen.DeviceName} at bounds {bounds.X},{bounds.Y} {bounds.Width}x{bounds.Height}");
         var borderForm = new MonitorBorderFlash(bounds, BlueColor);
 
@@ -1360,17 +1364,22 @@ public class MonitorItem
 public class MonitorBorderFlash : Form
 {
     private readonly Color _borderColor;
+    private readonly Rectangle _targetBounds;
     private const int BorderWidth = 5;
 
     public MonitorBorderFlash(Rectangle bounds, Color borderColor)
     {
         _borderColor = borderColor;
+        _targetBounds = bounds;
 
         FormBorderStyle = FormBorderStyle.None;
         BackColor = Color.Black;
         TransparencyKey = Color.Black;
-        Location = new Point(bounds.X, bounds.Y);
-        Size = bounds.Size;
+        // Without Manual, WinForms ignores Location and uses the Windows default
+        // cascade position on the primary monitor the first time the form is shown.
+        StartPosition = FormStartPosition.Manual;
+        AutoScaleMode = AutoScaleMode.None;
+        Bounds = bounds;
         TopMost = true;
         ShowInTaskbar = false;
         ControlBox = false;
@@ -1378,9 +1387,18 @@ public class MonitorBorderFlash : Form
         Opacity = 1.0;
     }
 
+    protected override void OnLoad(EventArgs e)
+    {
+        base.OnLoad(e);
+        // Re-apply after the handle exists: a DPI change while moving across monitors
+        // can rescale the form, so pin it to the exact target rectangle.
+        Bounds = _targetBounds;
+    }
+
     protected override void OnShown(EventArgs e)
     {
         base.OnShown(e);
+        if (Bounds != _targetBounds) Bounds = _targetBounds;
         Invalidate();
         Refresh();
     }

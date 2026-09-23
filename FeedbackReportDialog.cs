@@ -79,7 +79,9 @@ public class FeedbackReportDialog : Form
     private bool _dragTrimStart;
     private bool _dragTrimEnd;
     private bool _isSeeking;
+    private bool _isDragging;
     private bool _wasPlayingBeforeSeek;
+    private System.Windows.Forms.Timer? _frameRefreshTimer;
 
     private delegate IntPtr LowLevelKeyboardProc(int nCode, IntPtr wParam, IntPtr lParam);
 
@@ -286,11 +288,8 @@ public class FeedbackReportDialog : Form
             {
                 _isPlaying = false;
                 _playPauseButton.Text = "Play";
-                // Re-arm the player back into a paused state so seeking and replay work.
-                // After EndReached, LibVLC enters Ended state where Time setter is ignored.
-                _mediaPlayer.Play();
-                _mediaPlayer.SetPause(true);
-                SeekTo(GetTrimStartMs());
+                // Leave state as Ended. StartPlayback recreates Media when state == Ended,
+                // which is the only reliable way out — Play()+SetPause() is a race in libvlc 3.x.
             }));
         };
         _videoBox.MediaPlayer = _mediaPlayer;
@@ -334,6 +333,9 @@ public class FeedbackReportDialog : Form
 
     private void FeedbackReportDialog_FormClosing(object? sender, FormClosingEventArgs e)
     {
+        _frameRefreshTimer?.Stop();
+        _frameRefreshTimer?.Dispose();
+        _frameRefreshTimer = null;
         StopPlayback();
         _positionTimer.Stop();
         StopProcessingAnimation();
@@ -450,15 +452,24 @@ public class FeedbackReportDialog : Form
     }
 
     private void PlayPauseButton_Click(object? sender, EventArgs e) { if (_isPlaying) PausePlayback(); else StartPlayback(); }
-    private void StopButton_Click(object? sender, EventArgs e)      { StopPlayback(); SeekTo(GetTrimStartMs()); }
+    private void StopButton_Click(object? sender, EventArgs e)      { StopPlayback(); SeekTo(GetTrimStartMs()); ForceFrameUpdate(); }
 
     private void StartPlayback()
     {
-        if (_mediaPlayer.Media == null) return;
+        if (_mediaPlayer.Media == null || _videoPath == null) return;
+
+        if (_mediaPlayer.State == VLCState.Ended)
+        {
+            // Play()+SetPause() from Ended state is a race in libvlc 3.x — recreate media instead.
+            var old = _mediaPlayer.Media;
+            _mediaPlayer.Media = new Media(_libVlc, new Uri(_videoPath));
+            old.Dispose();
+        }
+
         long trimStart = GetTrimStartMs();
         long trimEnd = GetTrimEndMs();
         long current = Math.Max(0, _mediaPlayer.Time);
-        if (current < trimStart || current > trimEnd) SeekTo(trimStart);
+        if (current < trimStart || current >= trimEnd) SeekTo(trimStart);
         _mediaPlayer.Play();
         _isPlaying = true;
         _playPauseButton.Text = "Pause";
@@ -466,11 +477,8 @@ public class FeedbackReportDialog : Form
 
     private void PausePlayback()
     {
-        if (_mediaPlayer.Media != null)
-        {
-            _mediaPlayer.SetPause(true);
-        }
-
+        _frameRefreshTimer?.Stop();
+        if (_mediaPlayer.Media != null) _mediaPlayer.SetPause(true);
         _isPlaying = false;
         _playPauseButton.Text = "Play";
     }
@@ -515,16 +523,16 @@ public class FeedbackReportDialog : Form
     private void SeekBar_Scroll(object? sender, EventArgs e)
     {
         int target = Math.Max((int)GetTrimStartMs(), Math.Min((int)GetTrimEndMs(), _seekBar.Value));
-        if (target != _seekBar.Value)
-        {
-            _seekBar.Value = target;
-        }
-
+        if (target != _seekBar.Value) _seekBar.Value = target;
         SeekTo(target);
+        // Render the frame at the dragged position while paused.
+        if (!_isPlaying) ForceFrameUpdate();
     }
 
     private void SeekBar_MouseDown(object? sender, MouseEventArgs e)
     {
+        _frameRefreshTimer?.Stop();
+        _isDragging = true;
         _isSeeking = true;
         _wasPlayingBeforeSeek = _isPlaying;
         if (_isPlaying) PausePlayback();
@@ -532,8 +540,50 @@ public class FeedbackReportDialog : Form
 
     private void SeekBar_MouseUp(object? sender, MouseEventArgs e)
     {
-        _isSeeking = false;
-        if (_wasPlayingBeforeSeek) StartPlayback();
+        _isDragging = false;
+        if (_wasPlayingBeforeSeek)
+        {
+            _isSeeking = false;
+            StartPlayback();
+        }
+        else
+        {
+            // Keep _isSeeking=true until ForceFrameUpdate renders the frame so
+            // SyncUiToPlayer cannot overwrite the seekbar during the render window.
+            ForceFrameUpdate();
+        }
+    }
+
+    // Briefly unpause so libvlc 3.x decodes and displays the frame at the current
+    // seek position (setting Time while paused only queues the seek; no frame renders
+    // until the player transitions to Playing). Re-pauses via a debounced timer.
+    // Keeps _isSeeking=true during the render window to block SyncUiToPlayer.
+    private void ForceFrameUpdate()
+    {
+        if (_isPlaying) { if (!_isDragging) _isSeeking = false; return; }
+
+        var state = _mediaPlayer.State;
+        if (state == VLCState.Ended   || state == VLCState.Stopped ||
+            state == VLCState.NothingSpecial || state == VLCState.Error)
+        {
+            if (!_isDragging) _isSeeking = false;
+            return;
+        }
+
+        _frameRefreshTimer?.Stop();
+        _mediaPlayer.SetPause(false);
+
+        if (_frameRefreshTimer == null)
+        {
+            _frameRefreshTimer = new System.Windows.Forms.Timer { Interval = 100 };
+            _frameRefreshTimer.Tick += (_, _) =>
+            {
+                _frameRefreshTimer!.Stop();
+                if (!_isPlaying) _mediaPlayer.SetPause(true);
+                if (!_isDragging) _isSeeking = false;
+            };
+        }
+        _frameRefreshTimer.Start();
     }
 
     private void SeekTo(long fi)
